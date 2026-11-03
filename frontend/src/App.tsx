@@ -564,8 +564,8 @@ function TelegramModal({ status, onConnected, onDisconnected, onClose }: { statu
           </>
         ) : !status.configured ? (
           <>
-            <p className="modal-copy">Telegram backup needs the app credentials from <strong>my.telegram.org</strong>. Add them to the backend environment before connecting an account.</p>
-            <div className="setup-note"><AlertCircle size={17} /><span>Set <code>TELEGRAM_API_ID</code> and <code>TELEGRAM_API_HASH</code> in <code>backend/.env</code>, then restart the backend.</span></div>
+            <p className="modal-copy">Telegram backup needs the app credentials from <strong>my.telegram.org</strong>. Run the InfinityVault setup command once in your terminal; it saves them privately and starts both services.</p>
+            <div className="setup-note"><AlertCircle size={17} /><span>Run <code>npm run infinityvault -- setup</code> from the InfinityVault project folder. Your API hash is hidden while you type and never enters the browser.</span></div>
             <button className="modal-secondary" type="button" onClick={onClose}>Close setup</button>
           </>
         ) : step === 'intro' ? (

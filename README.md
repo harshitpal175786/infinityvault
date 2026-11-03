@@ -45,36 +45,31 @@ Telegram currently limits individual uploads to 2 GB for free accounts and 4 GB 
 
 ## Local setup
 
-### 1. Configure Telegram privately
+From the InfinityVault project folder, run:
 
 ```bash
-cd backend
-cp .env.example .env
+npm run infinityvault -- setup
 ```
 
-Fill in `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` in `backend/.env`. The `.env` file is ignored by Git and must never be committed.
+The setup command:
 
-### 2. Start the backend
-
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000 --env-file .env
-```
-
-### 3. Start the frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
+1. asks for the Telegram `api_id` and `api_hash` if they are not already configured;
+2. hides the API hash while you type;
+3. saves the credentials with restricted permissions outside the repository at `~/.config/infinityvault/.env`;
+4. creates the Python environment and installs dependencies when needed;
+5. starts both the backend and frontend.
 
 Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/).
 
-Then choose **Connect Telegram**, enter the phone number connected to Telegram, enter the verification code, and provide the Telegram 2FA password if requested.
+To start again after the first setup:
+
+```bash
+npm run infinityvault -- start
+```
+
+The `--no-install` option skips dependency checks when they are already installed. `Ctrl+C` stops both services.
+
+Then choose **Connect Telegram** in the browser, enter the phone number connected to Telegram, enter the verification code, and provide the Telegram 2FA password if requested. These are the user account credentials; they are handled by the backend authorization flow and are not saved by the setup CLI.
 
 ## Persistence
 
@@ -92,7 +87,8 @@ Keep `backend/data/` and the private environment file when stopping and restarti
 ## Security
 
 - Telegram sessions are encrypted at rest and never sent to the browser.
-- API credentials, session keys, databases, uploads, and caches are ignored by Git.
+- Telegram API credentials, session keys, databases, uploads, and caches are ignored by Git.
+- The setup CLI stores app credentials outside the project at `~/.config/infinityvault/.env` with owner-only permissions.
 - Do not paste credentials into source files, README files, logs, or commits.
 - This local build uses a browser-generated client ID. Add real application authentication before deploying for multiple users.
 
