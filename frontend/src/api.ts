@@ -35,6 +35,28 @@ export type ApiMedia = {
   upload_status: UploadStatus
   upload_error?: string
   telegram_message_id?: number
+  checksum?: string
+  is_favorite: boolean
+  is_archived: boolean
+  is_trashed: boolean
+  description: string
+  folder_path?: string
+  duplicate?: boolean
+}
+
+export type Album = {
+  id: string
+  client_id: string
+  name: string
+  description: string
+  media_count: number
+}
+
+export type Tag = {
+  id: string
+  client_id: string
+  name: string
+  media_count: number
 }
 
 function getClientId(): string {
@@ -92,8 +114,11 @@ export function disconnectTelegram(): Promise<{ connected: false }> {
   return request<{ connected: false }>('/api/telegram/disconnect', { method: 'POST' })
 }
 
-export async function listMedia(): Promise<ApiMedia[]> {
-  return request<ApiMedia[]>('/api/media')
+export async function listMedia(view = 'library', search = '', albumId?: string): Promise<ApiMedia[]> {
+  const params = new URLSearchParams({ view })
+  if (search.trim()) params.set('search', search.trim())
+  if (albumId) params.set('album_id', albumId)
+  return request<ApiMedia[]>(`/api/media?${params.toString()}`)
 }
 
 export async function uploadMedia(item: MediaItem): Promise<ApiMedia> {
@@ -111,4 +136,49 @@ export async function uploadMedia(item: MediaItem): Promise<ApiMedia> {
 
 export function retryMedia(id: string): Promise<ApiMedia> {
   return request<ApiMedia>(`/api/media/${id}/retry`, { method: 'POST' })
+}
+
+export type MediaUpdate = {
+  favorite?: boolean
+  archived?: boolean
+  trashed?: boolean
+  description?: string
+  captured_at?: string
+  folder_path?: string
+}
+
+export function updateMedia(id: string, payload: MediaUpdate): Promise<ApiMedia> {
+  return request<ApiMedia>(`/api/media/${id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+}
+
+export function deleteMedia(id: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/media/${id}`, { method: 'DELETE' })
+}
+
+export function listAlbums(): Promise<Album[]> {
+  return request<Album[]>('/api/albums')
+}
+
+export function createAlbum(name: string, description = ''): Promise<Album> {
+  return request<Album>('/api/albums', { method: 'POST', body: JSON.stringify({ name, description }) })
+}
+
+export function deleteAlbum(id: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/albums/${id}`, { method: 'DELETE' })
+}
+
+export function addMediaToAlbum(id: string, mediaIds: string[]): Promise<{ added: number }> {
+  return request<{ added: number }>(`/api/albums/${id}/media`, { method: 'POST', body: JSON.stringify({ media_ids: mediaIds }) })
+}
+
+export function listTags(): Promise<Tag[]> {
+  return request<Tag[]>('/api/tags')
+}
+
+export function createTag(name: string): Promise<Tag> {
+  return request<Tag>('/api/tags', { method: 'POST', body: JSON.stringify({ name }) })
+}
+
+export function addTagToMedia(id: string, mediaIds: string[]): Promise<{ added: number }> {
+  return request<{ added: number }>(`/api/tags/${id}/media`, { method: 'POST', body: JSON.stringify({ media_ids: mediaIds }) })
 }

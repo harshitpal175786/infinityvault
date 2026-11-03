@@ -19,4 +19,10 @@ export type MediaItem = {
   uploadStatus: UploadStatus
   uploadError?: string
   telegramMessageId?: number
+  checksum?: string
+  isFavorite: boolean
+  isArchived: boolean
+  isTrashed: boolean
+  description: string
+  folderPath?: string
 }

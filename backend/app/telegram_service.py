@@ -205,6 +205,12 @@ class TelegramService:
     async def enqueue(self, media_id: str) -> None:
         await self.upload_queue.put(media_id)
 
+    async def delete_telegram_message(self, client_id: str, message_id: int) -> None:
+        client = await self.get_authorized_client(client_id)
+        if not client:
+            raise ValueError("Reconnect Telegram before permanently deleting this original")
+        await client.delete_messages("me", [message_id])
+
     async def telegram_media_path(self, client_id: str, media_id: str) -> Path:
         media = db.get_media(media_id, client_id)
         if not media:

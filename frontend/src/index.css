@@ -32,6 +32,7 @@ button { cursor: pointer; }
 .nav-item { width: 100%; border: 0; background: transparent; color: #8b8fa1; display: flex; align-items: center; gap: 13px; padding: 12px 14px; margin: 3px 0; border-radius: 12px; text-align: left; font-size: 13px; font-weight: 600; transition: .2s ease; }
 .nav-item:hover { color: var(--ink); background: #f2f2fa; }
 .nav-item.active { color: var(--purple); background: var(--soft-purple); }
+.nav-item.nested { padding-left: 28px; font-size: 12px; }
 .nav-count { margin-left: auto; color: #b1b3c1; font-size: 11px; font-weight: 500; }
 .nav-item.active .nav-count { color: #7e74d5; }
 .telegram-status { display: flex; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: white; }
@@ -107,6 +108,9 @@ button { cursor: pointer; }
 .select-button { position: absolute; top: 9px; right: 9px; width: 24px; height: 24px; display: grid; place-items: center; border: 2px solid rgba(255,255,255,.95); border-radius: 50%; color: white; background: rgba(42,43,56,.18); opacity: 0; transition: .2s ease; }
 .media-card:hover .select-button, .select-button.selected, .select-button:focus-visible { opacity: 1; }
 .select-button.selected { border-color: #6659c9; background: #6659c9; }
+.favorite-button { position: absolute; right: 10px; top: 42px; width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.7); border-radius: 50%; color: white; background: rgba(42,43,56,.24); opacity: 0; transition: .2s ease; }
+.media-card:hover .favorite-button, .favorite-button.active, .favorite-button:focus-visible { opacity: 1; }
+.favorite-button.active { color: #e4a04e; background: rgba(255,250,235,.94); }
 .video-overlay { top: 50%; left: 50%; width: 32px; height: 32px; display: grid; place-items: center; color: white; background: rgba(38,40,52,.54); border: 1px solid rgba(255,255,255,.55); border-radius: 50%; transform: translate(-50%, -50%); }
 .duration-chip { right: 9px; bottom: 9px; padding: 4px 6px; border-radius: 5px; color: white; background: rgba(25,26,36,.66); font-size: 9px; font-weight: 600; }
 .media-meta { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-top: 10px; }
@@ -118,6 +122,7 @@ button { cursor: pointer; }
 .media-action { display: flex; align-items: center; gap: 5px; margin-top: 8px; padding: 0; border: 0; color: #655ac0; background: transparent; font-size: 9px; font-weight: 700; }
 .media-action:hover { color: #4f449e; }
 .media-error { max-width: 100%; overflow: hidden; margin: 5px 0 0; color: #bd6d70; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.media-description { overflow: hidden; margin: 7px 0 0; color: #8d91a5; font-size: 9px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .empty-state { max-width: 490px; margin: 58px auto 30px; padding: 40px 28px; border: 1px dashed #d8d9e6; border-radius: 18px; text-align: center; background: rgba(255,255,255,.52); }
 .empty-icon { width: 52px; height: 52px; display: grid; place-items: center; margin: 0 auto 16px; border-radius: 16px; color: #6459bf; background: #f0efff; }
 .empty-state h3 { margin: 0; color: var(--ink); font-family: 'Playfair Display', Georgia, serif; font-size: 22px; }
@@ -143,6 +148,11 @@ button { cursor: pointer; }
 .modal-secondary { width: 100%; border: 1px solid #dedff0; border-radius: 10px; padding: 11px; color: #6056b5; background: white; font-size: 12px; font-weight: 700; }
 .modal-secondary:hover { background: #fafaff; }
 .modal-secondary:disabled { cursor: wait; opacity: .55; }
+.details-modal { position: relative; width: min(100%, 480px); padding: 31px; border: 1px solid rgba(255,255,255,.85); border-radius: 20px; background: white; box-shadow: 0 24px 70px rgba(46,47,76,.2); }
+.details-modal h2 { margin: 0 0 20px; color: var(--ink); font-family: 'Playfair Display', Georgia, serif; font-size: 25px; letter-spacing: -.5px; }
+.details-modal .modal-label { margin-top: 14px; }
+.details-modal textarea { width: 100%; display: block; resize: vertical; margin-top: 7px; padding: 12px; border: 1px solid #dedff0; border-radius: 9px; outline: 0; color: var(--ink); background: #fcfcff; font-size: 13px; }
+.details-modal textarea:focus { border-color: #a9a1e8; box-shadow: 0 0 0 3px #f0efff; }
 .primary-modal-button { color: white; border-color: var(--purple); background: var(--purple); box-shadow: 0 6px 14px rgba(102,89,201,.16); }
 .primary-modal-button:hover { color: white; background: var(--purple-dark); }
 .danger-button { color: #b66062; border-color: #f0d8d8; }

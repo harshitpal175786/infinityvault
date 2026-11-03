@@ -11,28 +11,35 @@ import {
   Download,
   Eye,
   Film,
+  Folder,
   ImagePlus,
   Images,
   LockKeyhole,
   Menu,
   MoreHorizontal,
+  Pencil,
   Play,
+  Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   Settings2,
   ShieldCheck,
   Star,
+  Tag as TagIcon,
+  Trash2,
   Upload,
   X,
   Zap,
 } from 'lucide-react'
 import { createMediaItem } from './media'
-import { disconnectTelegram, getTelegramStatus, listMedia, mediaUrl, retryMedia, startTelegramAuth, uploadMedia, verifyTelegramAuth } from './api'
-import type { ApiMedia, TelegramAuthResponse, TelegramStatus } from './api'
+import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getTelegramStatus, listAlbums, listMedia, listTags, mediaUrl, retryMedia, updateMedia, startTelegramAuth, uploadMedia, verifyTelegramAuth } from './api'
+import type { Album, ApiMedia, Tag, TelegramAuthResponse, TelegramStatus } from './api'
 import type { MediaItem, MediaType, UploadStatus } from './types'
 
 type Filter = 'all' | MediaType
+type LibraryView = 'library' | 'favorites' | 'archive' | 'trash' | 'album'
 
 const filters: { value: Filter; label: string }[] = [
   { value: 'all', label: 'All media' },
@@ -98,6 +105,12 @@ function itemFromApi(media: ApiMedia): MediaItem {
     uploadStatus: media.upload_status,
     uploadError: media.upload_error,
     telegramMessageId: media.telegram_message_id,
+    checksum: media.checksum,
+    isFavorite: media.is_favorite,
+    isArchived: media.is_archived,
+    isTrashed: media.is_trashed,
+    description: media.description,
+    folderPath: media.folder_path,
   }
 }
 
@@ -115,10 +128,15 @@ function App() {
   const [items, setItems] = useState<MediaItem[]>([])
   const [filter, setFilter] = useState<Filter>('all')
   const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc')
+  const [libraryView, setLibraryView] = useState<LibraryView>('library')
+  const [activeAlbumId, setActiveAlbumId] = useState<string>()
+  const [albums, setAlbums] = useState<Album[]>([])
+  const [tags, setTags] = useState<Tag[]>([])
   const [query, setQuery] = useState('')
   const [isDragging, setIsDragging] = useState(false)
   const [isTelegramOpen, setIsTelegramOpen] = useState(false)
   const [viewingItem, setViewingItem] = useState<MediaItem | null>(null)
+  const [editingItem, setEditingItem] = useState<MediaItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [notice, setNotice] = useState('')
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus>({
@@ -130,9 +148,17 @@ function App() {
 
   async function refreshLibrary(showError = true) {
     try {
-      const [savedMedia, savedTelegramStatus] = await Promise.all([listMedia(), getTelegramStatus()])
+      const mediaView = libraryView === 'album' ? 'library' : libraryView
+      const [savedMedia, savedTelegramStatus, savedAlbums, savedTags] = await Promise.all([
+        listMedia(mediaView, '', activeAlbumId),
+        getTelegramStatus(),
+        listAlbums(),
+        listTags(),
+      ])
       setItems(savedMedia.map(itemFromApi))
       setTelegramStatus(savedTelegramStatus)
+      setAlbums(savedAlbums)
+      setTags(savedTags)
     } catch (error) {
       if (showError) setNotice(error instanceof Error ? error.message : 'The local service is not available yet.')
     }
@@ -140,7 +166,8 @@ function App() {
 
   useEffect(() => {
     void refreshLibrary()
-  }, [])
+    setSelectedIds(new Set())
+  }, [libraryView, activeAlbumId])
 
   useEffect(() => {
     const hasActiveUploads = items.some((item) => ['queued', 'waiting_for_telegram', 'uploading'].includes(item.uploadStatus))
@@ -235,6 +262,99 @@ function App() {
     }
   }
 
+  async function updateSelectedItems(payload: Parameters<typeof updateMedia>[1], successMessage: string) {
+    try {
+      await Promise.all(selectedItems.map((item) => updateMedia(item.id, payload)))
+      await refreshLibrary(false)
+      clearSelection()
+      setNotice(successMessage)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Some selected items could not be updated.')
+    }
+  }
+
+  async function toggleFavorite(item: MediaItem) {
+    try {
+      const saved = await updateMedia(item.id, { favorite: !item.isFavorite })
+      setItems((current) => current.map((currentItem) => currentItem.id === item.id ? itemFromApi(saved) : currentItem))
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Favorite state could not be updated.')
+    }
+  }
+
+  async function saveDetails(item: MediaItem, description: string, folderPath: string, capturedAt: string) {
+    try {
+      await updateMedia(item.id, { description, folder_path: folderPath, captured_at: new Date(capturedAt).toISOString() })
+      setEditingItem(null)
+      await refreshLibrary(false)
+      setNotice('Media details updated.')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Media details could not be updated.')
+    }
+  }
+
+  async function createNewAlbum() {
+    const name = window.prompt('Album name')?.trim()
+    if (!name) return
+    try {
+      const album = await createAlbum(name)
+      setAlbums((current) => [album, ...current])
+      if (selectedIds.size > 0) {
+        await addMediaToAlbum(album.id, Array.from(selectedIds))
+        clearSelection()
+        setNotice(`${name} created with selected media.`)
+      } else {
+        setNotice(`${name} created.`)
+      }
+      setActiveAlbumId(album.id)
+      setLibraryView('album')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'The album could not be created.')
+    }
+  }
+
+  async function addSelectionToAlbum() {
+    if (!selectedIds.size) return
+    const name = window.prompt(`Add ${selectedIds.size} item${selectedIds.size === 1 ? '' : 's'} to which album?`, albums[0]?.name)?.trim()
+    if (!name) return
+    try {
+      const album = albums.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase()) ?? await createAlbum(name)
+      await addMediaToAlbum(album.id, Array.from(selectedIds))
+      await refreshLibrary(false)
+      clearSelection()
+      setNotice(`Added media to ${album.name}.`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Media could not be added to the album.')
+    }
+  }
+
+  async function addSelectionTag() {
+    if (!selectedIds.size) return
+    const name = window.prompt('Tag name')?.trim()
+    if (!name) return
+    try {
+      const tag = tags.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase()) ?? await createTag(name)
+      await addTagToMedia(tag.id, Array.from(selectedIds))
+      await refreshLibrary(false)
+      clearSelection()
+      setNotice(`Tagged ${selectedIds.size} item${selectedIds.size === 1 ? '' : 's'} as ${tag.name}.`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'The tag could not be applied.')
+    }
+  }
+
+  async function deleteSelectedForever() {
+    if (!selectedIds.size || !window.confirm('Permanently delete the selected originals from Telegram and this library?')) return
+    try {
+      await Promise.all(selectedItems.map((item) => deleteMedia(item.id)))
+      await refreshLibrary(false)
+      clearSelection()
+      setNotice('Selected media permanently deleted.')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Media could not be permanently deleted.')
+    }
+  }
+
   async function handleTelegramConnected() {
     const status = await getTelegramStatus()
     setTelegramStatus(status)
@@ -275,6 +395,22 @@ function App() {
     setSelectedIds(new Set())
   }
 
+  function openView(view: LibraryView, albumId?: string) {
+    setLibraryView(view)
+    setActiveAlbumId(albumId)
+    setFilter('all')
+  }
+
+  const pageTitle = libraryView === 'favorites'
+    ? 'Favorites'
+    : libraryView === 'archive'
+      ? 'Archive'
+      : libraryView === 'trash'
+        ? 'Trash'
+        : libraryView === 'album'
+          ? albums.find((album) => album.id === activeAlbumId)?.name ?? 'Album'
+          : filter === 'video' ? 'Videos' : filter === 'photo' ? 'Photos' : 'Your photos'
+
   function downloadSelected() {
     selectedItems.filter((item) => item.downloadUrl).forEach((item, index) => {
       window.setTimeout(() => {
@@ -300,28 +436,36 @@ function App() {
 
         <div className="sidebar-section">
           <p className="eyebrow">Library</p>
-          <button className="nav-item active" type="button">
+          <button className={libraryView === 'library' && filter === 'all' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('library')}>
             <Images size={18} />
             <span>Photos</span>
             <span className="nav-count">{items.length}</span>
           </button>
-          <button className="nav-item" type="button" onClick={() => setFilter('photo')}>
+          <button className={libraryView === 'library' && filter === 'photo' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => { openView('library'); setFilter('photo') }}>
             <ImagePlus size={18} />
             <span>All photos</span>
             <span className="nav-count">{photoCount}</span>
           </button>
-          <button className="nav-item" type="button" onClick={() => setFilter('video')}>
+          <button className={libraryView === 'library' && filter === 'video' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => { openView('library'); setFilter('video') }}>
             <Film size={18} />
             <span>Videos</span>
             <span className="nav-count">{videoCount}</span>
           </button>
-          <button className="nav-item" type="button" onClick={() => setNotice('Albums are coming soon. Your timeline remains sorted by capture time.') }>
+          <button className={libraryView === 'album' ? 'nav-item active' : 'nav-item'} type="button" onClick={createNewAlbum}>
             <Archive size={18} />
             <span>Albums</span>
+            <Plus size={14} className="nav-count" />
           </button>
-          <button className="nav-item" type="button" onClick={() => setNotice('Favorites are coming soon. You can still search and filter your library.') }>
+          {albums.map((album) => <button className={libraryView === 'album' && activeAlbumId === album.id ? 'nav-item nested active' : 'nav-item nested'} type="button" key={album.id} onClick={() => openView('album', album.id)}><Folder size={16} /><span>{album.name}</span><span className="nav-count">{album.media_count}</span></button>)}
+          <button className={libraryView === 'favorites' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('favorites')}>
             <Star size={18} />
-            <span>Favorites</span>
+            <span>Favorites</span><span className="nav-count">{items.filter((item) => item.isFavorite).length}</span>
+          </button>
+          <button className={libraryView === 'archive' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('archive')}>
+            <Archive size={18} /><span>Archive</span>
+          </button>
+          <button className={libraryView === 'trash' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('trash')}>
+            <Trash2 size={18} /><span>Trash</span>
           </button>
         </div>
 
@@ -349,7 +493,7 @@ function App() {
           <button className="mobile-menu icon-button" type="button" aria-label="Open menu"><Menu size={19} /></button>
           <div className="topbar-title">
             <span className="overline">InfinityVault</span>
-            <h1>{filter === 'video' ? 'Videos' : filter === 'photo' ? 'Photos' : 'Your photos'}</h1>
+            <h1>{pageTitle}</h1>
           </div>
           <div className="topbar-actions">
             <label className="search-field">
@@ -404,8 +548,16 @@ function App() {
             {selectedIds.size > 0 ? (
               <div className="selection-actions">
                 <strong>{selectedIds.size} selected</strong>
-                <button type="button" onClick={downloadSelected} disabled={!selectedItems.some((item) => item.downloadUrl)}><Download size={15} /> Download</button>
-                <button type="button" onClick={clearSelection}>Clear</button>
+                 {libraryView === 'trash' ? <button type="button" onClick={() => void updateSelectedItems({ trashed: false }, 'Selected media restored.')}><RotateCcw size={15} /> Restore</button> : <>
+                   <button type="button" onClick={() => void updateSelectedItems({ favorite: !selectedItems.every((item) => item.isFavorite) }, 'Favorites updated.')}><Star size={15} /> Favorite</button>
+                   <button type="button" onClick={() => void updateSelectedItems({ archived: true }, 'Selected media archived.')}><Archive size={15} /> Archive</button>
+                   <button type="button" onClick={() => void updateSelectedItems({ trashed: true }, 'Selected media moved to trash.')}><Trash2 size={15} /> Trash</button>
+                 </>}
+                 <button type="button" onClick={addSelectionToAlbum}><Folder size={15} /> Album</button>
+                 <button type="button" onClick={addSelectionTag}><TagIcon size={15} /> Tag</button>
+                 <button type="button" onClick={downloadSelected} disabled={!selectedItems.some((item) => item.downloadUrl)}><Download size={15} /> Download</button>
+                 {libraryView === 'trash' && <button type="button" onClick={() => void deleteSelectedForever()}><Trash2 size={15} /> Delete forever</button>}
+                 <button type="button" onClick={clearSelection}>Clear</button>
               </div>
             ) : (
               <button className="sort-button" type="button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}><span>{sortDirection === 'desc' ? 'Newest first' : 'Oldest first'}</span><ChevronDown size={15} /></button>
@@ -425,7 +577,7 @@ function App() {
               <section className="date-group" key={dateKey(group.date)}>
                 <div className="date-heading"><h3>{group.label}</h3><span>{group.items.length} {group.items.length === 1 ? 'item' : 'items'}</span></div>
                 <div className="media-grid">
-                  {group.items.map((item) => <MediaCard key={item.id} item={item} selected={selectedIds.has(item.id)} onSelect={() => toggleSelected(item.id)} onRetry={handleRetry} onConnect={() => setIsTelegramOpen(true)} onView={setViewingItem} />)}
+                  {group.items.map((item) => <MediaCard key={item.id} item={item} selected={selectedIds.has(item.id)} onSelect={() => toggleSelected(item.id)} onRetry={handleRetry} onConnect={() => setIsTelegramOpen(true)} onView={setViewingItem} onFavorite={() => void toggleFavorite(item)} onEdit={() => setEditingItem(item)} />)}
                 </div>
               </section>
             )) : (
@@ -436,12 +588,13 @@ function App() {
       </main>
 
       {isTelegramOpen && <TelegramModal status={telegramStatus} onConnected={handleTelegramConnected} onDisconnected={handleTelegramDisconnected} onClose={() => setIsTelegramOpen(false)} />}
+      {editingItem && <MediaDetailsModal item={editingItem} onSave={saveDetails} onClose={() => setEditingItem(null)} />}
       {viewingItem && <MediaViewer item={viewingItem} items={filteredItems} onChange={setViewingItem} onClose={() => setViewingItem(null)} />}
     </div>
   )
 }
 
-function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView }: { item: MediaItem; selected: boolean; onSelect: () => void; onRetry: (item: MediaItem) => void; onConnect: () => void; onView: (item: MediaItem) => void }) {
+function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView, onFavorite, onEdit }: { item: MediaItem; selected: boolean; onSelect: () => void; onRetry: (item: MediaItem) => void; onConnect: () => void; onView: (item: MediaItem) => void; onFavorite: () => void; onEdit: () => void }) {
   const statusIcon = item.uploadStatus === 'uploaded'
     ? <Check size={12} />
     : item.uploadStatus === 'failed'
@@ -461,18 +614,39 @@ function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView }: { i
           {selected && <Check size={14} strokeWidth={3} />}
         </button>
         {item.uploadStatus === 'uploaded' && item.telegramUrl && <button className="view-button" type="button" onClick={(event) => { event.stopPropagation(); onView(item) }}><Eye size={13} /> View original</button>}
+        <button className={item.isFavorite ? 'favorite-button active' : 'favorite-button'} type="button" aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Favorite ${item.name}`} onClick={(event) => { event.stopPropagation(); onFavorite() }}><Star size={14} fill={item.isFavorite ? 'currentColor' : 'none'} /></button>
       </div>
       <div className="media-meta">
         <div><strong>{formatTime(item.capturedAt)}</strong><span>{item.name}</span></div>
         <span className="media-size">{formatSize(item.size)}</span>
       </div>
       <div className="capture-source"><span className="source-dot" />{item.sourceLabel}</div>
+      {item.description && <p className="media-description">{item.description}</p>}
+      <button className="media-action" type="button" onClick={onEdit}><Pencil size={12} /> Edit details</button>
       {item.uploadStatus === 'failed' && <button className="media-action" type="button" onClick={() => onRetry(item)}><RefreshCw size={12} /> Retry backup</button>}
       {item.uploadStatus === 'local' && item.file && <button className="media-action" type="button" onClick={() => void onRetry(item)}><RefreshCw size={12} /> Try backup again</button>}
       {item.uploadStatus === 'waiting_for_telegram' && <button className="media-action" type="button" onClick={onConnect}><Send size={12} /> Connect Telegram</button>}
       {item.uploadError && <p className="media-error" title={item.uploadError}>{item.uploadError}</p>}
     </article>
   )
+}
+
+function MediaDetailsModal({ item, onSave, onClose }: { item: MediaItem; onSave: (item: MediaItem, description: string, folderPath: string, capturedAt: string) => Promise<void>; onClose: () => void }) {
+  const [description, setDescription] = useState(item.description)
+  const [folderPath, setFolderPath] = useState(item.folderPath ?? '')
+  const [capturedAt, setCapturedAt] = useState(item.capturedAt.toISOString().slice(0, 16))
+  const [busy, setBusy] = useState(false)
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="details-modal" role="dialog" aria-modal="true" aria-labelledby="details-title">
+      <button className="icon-button modal-close" type="button" aria-label="Close details" onClick={onClose}><X size={17} /></button>
+      <p className="section-kicker"><Pencil size={13} /> Media details</p>
+      <h2 id="details-title">Edit {item.name}</h2>
+      <label className="modal-label">Capture date and time<input type="datetime-local" value={capturedAt} onChange={(event) => setCapturedAt(event.target.value)} /></label>
+      <label className="modal-label">Folder path<input value={folderPath} onChange={(event) => setFolderPath(event.target.value)} placeholder="e.g. Trips/2026" /></label>
+      <label className="modal-label">Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} placeholder="Add a description" /></label>
+      <div className="form-actions"><button className="back-button" type="button" onClick={onClose}>Cancel</button><button className="modal-secondary primary-modal-button" type="button" disabled={busy || !capturedAt} onClick={() => { setBusy(true); void onSave(item, description, folderPath, capturedAt).finally(() => setBusy(false)) }}>{busy ? 'Saving…' : 'Save details'}</button></div>
+    </section>
+  </div>
 }
 
 function EmptyState({ onUpload }: { onUpload: () => void }) {

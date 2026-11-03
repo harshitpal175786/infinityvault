@@ -97,5 +97,9 @@ export async function createMediaItem(file: File): Promise<MediaItem | undefined
     duration: type === 'video' ? metadata.duration : undefined,
     file,
     uploadStatus: 'local',
+    isFavorite: false,
+    isArchived: false,
+    isTrashed: false,
+    description: '',
   }
 }

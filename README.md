@@ -17,6 +17,12 @@ InfinityVault is a private, Google Photos-style timeline for photos and videos. 
 - View original media directly from Telegram
 - Download the original Telegram file with its original filename
 - Retry handling for failed uploads and temporary Telegram errors
+- SHA-256 duplicate detection before creating another backup
+- Favorites, archive, trash, restore, and permanent deletion
+- Albums with multi-album media membership
+- Tags and batch tagging
+- Editable capture time, folder path, and descriptions
+- Search across filenames, descriptions, and folder paths
 
 ## Architecture
 
@@ -34,6 +40,12 @@ FastAPI backend
 ```
 
 The gallery uses local previews for responsiveness. **View original** and **Download original** retrieve the backed-up file through Telegram. Downloaded Telegram media is cached locally in `backend/data/telegram-cache`.
+
+The library database is the organization layer: albums, tags, favorites,
+archive/trash state, descriptions, folder paths, and checksums remain local;
+Telegram Saved Messages continues to hold the original media files. Uploading
+the same file again for the same client returns the existing library item
+instead of creating another Telegram copy.
 
 ## Requirements
 
