@@ -1,8 +1,12 @@
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
+  Archive,
+  CheckSquare,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Cloud,
   Download,
   Eye,
@@ -11,12 +15,14 @@ import {
   Images,
   LockKeyhole,
   Menu,
+  MoreHorizontal,
   Play,
   RefreshCw,
   Search,
   Send,
   Settings2,
   ShieldCheck,
+  Star,
   Upload,
   X,
   Zap,
@@ -113,6 +119,7 @@ function App() {
   const [isDragging, setIsDragging] = useState(false)
   const [isTelegramOpen, setIsTelegramOpen] = useState(false)
   const [viewingItem, setViewingItem] = useState<MediaItem | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [notice, setNotice] = useState('')
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus>({
     configured: false,
@@ -181,6 +188,7 @@ function App() {
   const totalSize = items.reduce((total, item) => total + item.size, 0)
   const photoCount = items.filter((item) => item.type === 'photo').length
   const videoCount = items.filter((item) => item.type === 'video').length
+  const selectedItems = items.filter((item) => selectedIds.has(item.id))
 
   async function addFiles(fileList: FileList | File[]) {
     const files = Array.from(fileList)
@@ -254,6 +262,34 @@ function App() {
     if (event.dataTransfer.files.length > 0) void addFiles(event.dataTransfer.files)
   }
 
+  function toggleSelected(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set())
+  }
+
+  function downloadSelected() {
+    selectedItems.filter((item) => item.downloadUrl).forEach((item, index) => {
+      window.setTimeout(() => {
+        const anchor = document.createElement('a')
+        anchor.href = item.downloadUrl!
+        anchor.download = item.name
+        document.body.appendChild(anchor)
+        anchor.click()
+        anchor.remove()
+      }, index * 250)
+    })
+    setNotice(`${selectedItems.filter((item) => item.downloadUrl).length} original ${selectedItems.length === 1 ? 'file' : 'files'} queued for download.`)
+    clearSelection()
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -266,18 +302,26 @@ function App() {
           <p className="eyebrow">Library</p>
           <button className="nav-item active" type="button">
             <Images size={18} />
-            <span>Timeline</span>
+            <span>Photos</span>
             <span className="nav-count">{items.length}</span>
           </button>
           <button className="nav-item" type="button" onClick={() => setFilter('photo')}>
             <ImagePlus size={18} />
-            <span>Photos</span>
+            <span>All photos</span>
             <span className="nav-count">{photoCount}</span>
           </button>
           <button className="nav-item" type="button" onClick={() => setFilter('video')}>
             <Film size={18} />
             <span>Videos</span>
             <span className="nav-count">{videoCount}</span>
+          </button>
+          <button className="nav-item" type="button" onClick={() => setNotice('Albums are coming soon. Your timeline remains sorted by capture time.') }>
+            <Archive size={18} />
+            <span>Albums</span>
+          </button>
+          <button className="nav-item" type="button" onClick={() => setNotice('Favorites are coming soon. You can still search and filter your library.') }>
+            <Star size={18} />
+            <span>Favorites</span>
           </button>
         </div>
 
@@ -304,8 +348,8 @@ function App() {
         <header className="topbar">
           <button className="mobile-menu icon-button" type="button" aria-label="Open menu"><Menu size={19} /></button>
           <div className="topbar-title">
-            <span className="overline">Your private library</span>
-            <h1>Timeline</h1>
+            <span className="overline">InfinityVault</span>
+            <h1>{filter === 'video' ? 'Videos' : filter === 'photo' ? 'Photos' : 'Your photos'}</h1>
           </div>
           <div className="topbar-actions">
             <label className="search-field">
@@ -314,7 +358,7 @@ function App() {
             </label>
             <button className="upload-button" type="button" onClick={() => fileInputRef.current?.click()}>
               <Upload size={17} />
-              <span>Upload media</span>
+              <span>Add photos & videos</span>
             </button>
             <input ref={fileInputRef} className="hidden-input" type="file" accept="image/*,video/*" multiple onChange={handleFileChange} />
           </div>
@@ -323,9 +367,9 @@ function App() {
         <div className="content-wrap">
           <section className="welcome-row">
             <div>
-              <p className="section-kicker"><span className="live-dot" /> Local preview</p>
-              <h2>Everything in its moment.</h2>
-              <p className="section-description">Select photos and videos from your gallery. InfinityVault keeps their original capture time and prepares them for private Telegram backup.</p>
+              <p className="section-kicker"><span className="live-dot" /> Private library</p>
+              <h2>Your memories, beautifully organized.</h2>
+              <p className="section-description">Browse every photo and video by the moment it was captured. InfinityVault keeps the original files safe in your Telegram Saved Messages.</p>
             </div>
             <div className="privacy-badge"><LockKeyhole size={16} /> Private by design</div>
           </section>
@@ -333,22 +377,22 @@ function App() {
           <section className="stats-grid" aria-label="Library summary">
             <div className="stat-card">
               <div className="stat-icon lavender"><Images size={18} /></div>
-              <div><span>Total media</span><strong>{items.length}</strong></div>
-              <small>Selected on this device</small>
+              <div><span>Total memories</span><strong>{items.length}</strong></div>
+              <small>{photoCount} photos · {videoCount} videos</small>
             </div>
             <div className="stat-card">
               <div className="stat-icon peach"><Cloud size={18} /></div>
-              <div><span>Local size</span><strong>{formatSize(totalSize)}</strong></div>
-              <small>Telegram backup pending</small>
+              <div><span>Library size</span><strong>{formatSize(totalSize)}</strong></div>
+              <small>Original files and previews</small>
             </div>
             <div className="stat-card backup-card">
               <div className="stat-icon mint"><ShieldCheck size={18} /></div>
-              <div><span>Backup status</span><strong>{telegramStatus.connected ? 'Connected' : 'Not connected'}</strong></div>
-              <small>{telegramStatus.connected ? telegramStatus.display_name : 'Connect Telegram to continue'}</small>
+              <div><span>Backup</span><strong>{telegramStatus.connected ? 'Protected' : 'Not connected'}</strong></div>
+              <small>{telegramStatus.connected ? `Telegram · ${telegramStatus.display_name}` : 'Connect Telegram to protect your files'}</small>
             </div>
           </section>
 
-          <div className="toolbar">
+          <div className={selectedIds.size > 0 ? 'toolbar selection-toolbar' : 'toolbar'}>
             <div className="filter-tabs" role="tablist" aria-label="Media filters">
               {filters.map((option) => (
                 <button key={option.value} type="button" className={filter === option.value ? 'filter-tab selected' : 'filter-tab'} onClick={() => setFilter(option.value)}>
@@ -357,7 +401,15 @@ function App() {
                 </button>
               ))}
             </div>
-            <button className="sort-button" type="button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}><span>{sortDirection === 'desc' ? 'Newest first' : 'Oldest first'}</span><ChevronDown size={15} /></button>
+            {selectedIds.size > 0 ? (
+              <div className="selection-actions">
+                <strong>{selectedIds.size} selected</strong>
+                <button type="button" onClick={downloadSelected} disabled={!selectedItems.some((item) => item.downloadUrl)}><Download size={15} /> Download</button>
+                <button type="button" onClick={clearSelection}>Clear</button>
+              </div>
+            ) : (
+              <button className="sort-button" type="button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}><span>{sortDirection === 'desc' ? 'Newest first' : 'Oldest first'}</span><ChevronDown size={15} /></button>
+            )}
           </div>
 
           {notice && (
@@ -373,7 +425,7 @@ function App() {
               <section className="date-group" key={dateKey(group.date)}>
                 <div className="date-heading"><h3>{group.label}</h3><span>{group.items.length} {group.items.length === 1 ? 'item' : 'items'}</span></div>
                 <div className="media-grid">
-                  {group.items.map((item) => <MediaCard key={item.id} item={item} onRetry={handleRetry} onConnect={() => setIsTelegramOpen(true)} onView={setViewingItem} />)}
+                  {group.items.map((item) => <MediaCard key={item.id} item={item} selected={selectedIds.has(item.id)} onSelect={() => toggleSelected(item.id)} onRetry={handleRetry} onConnect={() => setIsTelegramOpen(true)} onView={setViewingItem} />)}
                 </div>
               </section>
             )) : (
@@ -384,12 +436,12 @@ function App() {
       </main>
 
       {isTelegramOpen && <TelegramModal status={telegramStatus} onConnected={handleTelegramConnected} onDisconnected={handleTelegramDisconnected} onClose={() => setIsTelegramOpen(false)} />}
-      {viewingItem && <MediaViewer item={viewingItem} onClose={() => setViewingItem(null)} />}
+      {viewingItem && <MediaViewer item={viewingItem} items={filteredItems} onChange={setViewingItem} onClose={() => setViewingItem(null)} />}
     </div>
   )
 }
 
-function MediaCard({ item, onRetry, onConnect, onView }: { item: MediaItem; onRetry: (item: MediaItem) => void; onConnect: () => void; onView: (item: MediaItem) => void }) {
+function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView }: { item: MediaItem; selected: boolean; onSelect: () => void; onRetry: (item: MediaItem) => void; onConnect: () => void; onView: (item: MediaItem) => void }) {
   const statusIcon = item.uploadStatus === 'uploaded'
     ? <Check size={12} />
     : item.uploadStatus === 'failed'
@@ -399,13 +451,16 @@ function MediaCard({ item, onRetry, onConnect, onView }: { item: MediaItem; onRe
         : <Cloud size={12} />
 
   return (
-    <article className="media-card">
-      <div className="media-preview">
+    <article className={selected ? 'media-card selected' : 'media-card'}>
+      <div className="media-preview" onClick={() => item.uploadStatus === 'uploaded' && item.telegramUrl ? onView(item) : undefined}>
         {item.type === 'photo' ? <img src={item.url} alt={item.name} /> : <video src={item.url} muted playsInline preload="metadata" />}
         {item.type === 'video' && <div className="video-overlay"><Play size={15} fill="currentColor" /></div>}
         {item.type === 'video' && item.duration !== undefined && <span className="duration-chip">{formatDuration(item.duration)}</span>}
         <span className={`backup-chip status-${item.uploadStatus}`}>{statusIcon} {statusLabel(item.uploadStatus)}</span>
-        {item.uploadStatus === 'uploaded' && item.telegramUrl && <button className="view-button" type="button" onClick={() => onView(item)}><Eye size={13} /> View original</button>}
+        <button className={selected ? 'select-button selected' : 'select-button'} type="button" aria-label={selected ? `Deselect ${item.name}` : `Select ${item.name}`} onClick={(event) => { event.stopPropagation(); onSelect() }}>
+          {selected && <Check size={14} strokeWidth={3} />}
+        </button>
+        {item.uploadStatus === 'uploaded' && item.telegramUrl && <button className="view-button" type="button" onClick={(event) => { event.stopPropagation(); onView(item) }}><Eye size={13} /> View original</button>}
       </div>
       <div className="media-meta">
         <div><strong>{formatTime(item.capturedAt)}</strong><span>{item.name}</span></div>
@@ -542,10 +597,28 @@ function TelegramModal({ status, onConnected, onDisconnected, onClose }: { statu
   )
 }
 
-function MediaViewer({ item, onClose }: { item: MediaItem; onClose: () => void }) {
+function MediaViewer({ item, items, onChange, onClose }: { item: MediaItem; items: MediaItem[]; onChange: (item: MediaItem) => void; onClose: () => void }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const currentIndex = items.findIndex((candidate) => candidate.id === item.id)
+  const hasPrevious = currentIndex > 0
+  const hasNext = currentIndex >= 0 && currentIndex < items.length - 1
+
+  useEffect(() => {
+    setLoading(true)
+    setError('')
+  }, [item.id])
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose()
+      if (event.key === 'ArrowLeft' && hasPrevious) onChange(items[currentIndex - 1])
+      if (event.key === 'ArrowRight' && hasNext) onChange(items[currentIndex + 1])
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [currentIndex, hasNext, hasPrevious, items, onChange, onClose])
 
   function retry() {
     setError('')
@@ -567,14 +640,16 @@ function MediaViewer({ item, onClose }: { item: MediaItem; onClose: () => void }
           </div>
         </header>
         <div className="viewer-stage">
+          {hasPrevious && <button className="viewer-nav viewer-nav-left" type="button" aria-label="Previous item" onClick={() => onChange(items[currentIndex - 1])}><ChevronLeft size={25} /></button>}
           {loading && !error && <div className="viewer-loading"><Cloud size={20} />Loading original…</div>}
           {error ? <div className="viewer-error"><AlertCircle size={22} /><strong>Telegram media unavailable</strong><span>{error}</span><button className="viewer-retry" type="button" onClick={retry}><RefreshCw size={13} /> Try again</button></div> : item.type === 'photo' ? (
             <img key={`${item.id}-${attempt}`} src={item.telegramUrl} alt={item.name} onLoad={() => setLoading(false)} onError={() => { setLoading(false); setError('Reconnect Telegram and try viewing it again.') }} />
           ) : (
             <video key={`${item.id}-${attempt}`} src={item.telegramUrl} controls autoPlay playsInline onLoadedData={() => setLoading(false)} onError={() => { setLoading(false); setError('This video format cannot be played here. The original file is still in Telegram.') }} />
           )}
+          {hasNext && <button className="viewer-nav viewer-nav-right" type="button" aria-label="Next item" onClick={() => onChange(items[currentIndex + 1])}><ChevronRight size={25} /></button>}
         </div>
-        <footer className="viewer-footer"><span>{formatDateHeading(item.capturedAt)} · {formatTime(item.capturedAt)}</span><span>{formatSize(item.size)} · Original file</span></footer>
+        <footer className="viewer-footer"><span>{currentIndex + 1} of {items.length} · {formatDateHeading(item.capturedAt)} · {formatTime(item.capturedAt)}</span><span>{formatSize(item.size)} · Original file</span></footer>
       </section>
     </div>
   )
