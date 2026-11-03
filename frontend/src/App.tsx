@@ -444,15 +444,13 @@ function App() {
             <span>Photos</span>
             <span className="nav-count">{items.length}</span>
           </button>
-          <button className={libraryView === 'library' && filter === 'photo' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => { openView('library'); setFilter('photo') }}>
-            <ImagePlus size={18} />
-            <span>All photos</span>
-            <span className="nav-count">{photoCount}</span>
+          <button className="nav-item" type="button" onClick={() => setNotice('Explore will bring places, people, subjects, and memories together.') }>
+            <Sparkles size={18} />
+            <span>Explore</span>
           </button>
-          <button className={libraryView === 'library' && filter === 'video' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => { openView('library'); setFilter('video') }}>
-            <Film size={18} />
-            <span>Videos</span>
-            <span className="nav-count">{videoCount}</span>
+          <button className="nav-item" type="button" onClick={() => setNotice('Sharing will be available when account sharing is enabled.') }>
+            <Send size={18} />
+            <span>Sharing</span>
           </button>
           <button className={libraryView === 'album' ? 'nav-item active' : 'nav-item'} type="button" onClick={createNewAlbum}>
             <Archive size={18} />
@@ -469,6 +467,16 @@ function App() {
           </button>
           <button className={libraryView === 'trash' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('trash')}>
             <Trash2 size={18} /><span>Trash</span>
+          </button>
+        </div>
+
+        <div className="sidebar-section sidebar-filters">
+          <p className="eyebrow">Quick filters</p>
+          <button className={libraryView === 'library' && filter === 'photo' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => { openView('library'); setFilter('photo') }}>
+            <ImagePlus size={17} /><span>Photos only</span><span className="nav-count">{photoCount}</span>
+          </button>
+          <button className={libraryView === 'library' && filter === 'video' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => { openView('library'); setFilter('video') }}>
+            <Film size={17} /><span>Videos only</span><span className="nav-count">{videoCount}</span>
           </button>
         </div>
 
@@ -513,38 +521,16 @@ function App() {
           </div>
         </header>
 
-        <div className="content-wrap">
-          <section className="welcome-row">
+        <div className="content-wrap immich-content">
+          <section className="library-heading">
             <div>
-              <p className="section-kicker"><Sparkles size={13} /> Your private library</p>
-              <h2>{pageTitle === 'Your photos' ? 'A beautiful home for your memories.' : pageTitle}</h2>
-              <p className="section-description">Browse, search, and organize your moments. Originals stay protected in your Telegram Saved Messages.</p>
+              <span className="overline">Library</span>
+              <h2>{pageTitle}</h2>
             </div>
-            <div className="hero-side">
-              <div className="privacy-badge"><LockKeyhole size={16} /> Private by design</div>
-              <span className="hero-caption">{items.length} memories · {formatSize(totalSize)}</span>
-            </div>
+            <div className="library-heading-meta"><span><Cloud size={14} /> {telegramStatus.connected ? 'Backed up privately' : 'Backup not connected'}</span><strong>{items.length} assets</strong></div>
           </section>
 
-          <section className="stats-grid" aria-label="Library summary">
-            <div className="stat-card">
-              <div className="stat-icon lavender"><Images size={18} /></div>
-              <div><span>Total memories</span><strong>{items.length}</strong></div>
-              <small>{photoCount} photos · {videoCount} videos</small>
-            </div>
-            <div className="stat-card">
-              <div className="stat-icon peach"><Cloud size={18} /></div>
-              <div><span>Library size</span><strong>{formatSize(totalSize)}</strong></div>
-              <small>Original files and previews</small>
-            </div>
-            <div className="stat-card backup-card">
-              <div className="stat-icon mint"><ShieldCheck size={18} /></div>
-              <div><span>Backup</span><strong>{telegramStatus.connected ? 'Protected' : 'Not connected'}</strong></div>
-              <small>{telegramStatus.connected ? `Telegram · ${telegramStatus.display_name}` : 'Connect Telegram to protect your files'}</small>
-            </div>
-          </section>
-
-          <div className={selectedIds.size > 0 ? 'toolbar selection-toolbar' : 'toolbar'}>
+          <div className={selectedIds.size > 0 ? 'toolbar selection-toolbar' : 'toolbar immich-toolbar'}>
             <div className="toolbar-leading">
               <div className="filter-tabs" role="tablist" aria-label="Media filters">
               {filters.map((option) => (
@@ -554,7 +540,7 @@ function App() {
                 </button>
               ))}
               </div>
-              <span className="results-count">{filteredItems.length} {filteredItems.length === 1 ? 'memory' : 'memories'}</span>
+              <span className="results-count">{filteredItems.length} {filteredItems.length === 1 ? 'asset' : 'assets'}</span>
             </div>
             {selectedIds.size > 0 ? (
               <div className="selection-actions">
@@ -583,7 +569,7 @@ function App() {
             </div>
           )}
 
-          <div className={isDragging ? 'drop-zone dragging' : 'drop-zone'} onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop}>
+          <div className={isDragging ? 'drop-zone dragging' : 'drop-zone immich-timeline'} onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop}>
             {groupedItems.length > 0 ? groupedItems.map((group) => (
               <section className="date-group" key={dateKey(group.date)}>
                 <div className="date-heading"><h3>{group.label}</h3><span>{group.items.length} {group.items.length === 1 ? 'item' : 'items'}</span></div>
@@ -620,24 +606,26 @@ function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView, onFav
         {item.type === 'photo' ? <img src={item.url} alt={item.name} /> : <video src={item.url} muted playsInline preload="metadata" />}
         {item.type === 'video' && <div className="video-overlay"><Play size={15} fill="currentColor" /></div>}
         {item.type === 'video' && item.duration !== undefined && <span className="duration-chip">{formatDuration(item.duration)}</span>}
-        <span className={`backup-chip status-${item.uploadStatus}`}>{statusIcon} {statusLabel(item.uploadStatus)}</span>
+        {item.uploadStatus !== 'uploaded' && <span className={`backup-chip status-${item.uploadStatus}`}>{statusIcon} {statusLabel(item.uploadStatus)}</span>}
         <button className={selected ? 'select-button selected' : 'select-button'} type="button" aria-label={selected ? `Deselect ${item.name}` : `Select ${item.name}`} onClick={(event) => { event.stopPropagation(); onSelect() }}>
           {selected && <Check size={14} strokeWidth={3} />}
         </button>
-        {item.uploadStatus === 'uploaded' && item.telegramUrl && <button className="view-button" type="button" onClick={(event) => { event.stopPropagation(); onView(item) }}><Eye size={13} /> View original</button>}
-        <button className={item.isFavorite ? 'favorite-button active' : 'favorite-button'} type="button" aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Favorite ${item.name}`} onClick={(event) => { event.stopPropagation(); onFavorite() }}><Star size={14} fill={item.isFavorite ? 'currentColor' : 'none'} /></button>
+        <div className="asset-overlay-actions">
+          {item.uploadStatus === 'uploaded' && item.telegramUrl && <button className="view-button" type="button" onClick={(event) => { event.stopPropagation(); onView(item) }}><Eye size={13} /></button>}
+          <button className={item.isFavorite ? 'favorite-button active' : 'favorite-button'} type="button" aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Favorite ${item.name}`} onClick={(event) => { event.stopPropagation(); onFavorite() }}><Star size={14} fill={item.isFavorite ? 'currentColor' : 'none'} /></button>
+          <button className="asset-edit-button" type="button" aria-label={`Edit ${item.name}`} onClick={(event) => { event.stopPropagation(); onEdit() }}><Pencil size={13} /></button>
+        </div>
       </div>
-      <div className="media-meta">
-        <div><strong>{formatTime(item.capturedAt)}</strong><span>{item.name}</span></div>
-        <span className="media-size">{formatSize(item.size)}</span>
+      <div className="asset-caption">
+        <strong>{formatTime(item.capturedAt)}</strong>
+        <span title={item.name}>{item.name}</span>
       </div>
-      <div className="capture-source"><span className="source-dot" />{item.sourceLabel}</div>
-      {item.description && <p className="media-description">{item.description}</p>}
-      <button className="media-action" type="button" onClick={onEdit}><Pencil size={12} /> Edit details</button>
-      {item.uploadStatus === 'failed' && <button className="media-action" type="button" onClick={() => onRetry(item)}><RefreshCw size={12} /> Retry backup</button>}
-      {item.uploadStatus === 'local' && item.file && <button className="media-action" type="button" onClick={() => void onRetry(item)}><RefreshCw size={12} /> Try backup again</button>}
-      {item.uploadStatus === 'waiting_for_telegram' && <button className="media-action" type="button" onClick={onConnect}><Send size={12} /> Connect Telegram</button>}
-      {item.uploadError && <p className="media-error" title={item.uploadError}>{item.uploadError}</p>}
+      {(item.uploadStatus === 'failed' || item.uploadStatus === 'local' || item.uploadStatus === 'waiting_for_telegram') && <div className="asset-status-action">
+        {item.uploadStatus === 'failed' && <button className="media-action" type="button" onClick={() => onRetry(item)}><RefreshCw size={12} /> Retry backup</button>}
+        {item.uploadStatus === 'local' && item.file && <button className="media-action" type="button" onClick={() => void onRetry(item)}><RefreshCw size={12} /> Try backup again</button>}
+        {item.uploadStatus === 'waiting_for_telegram' && <button className="media-action" type="button" onClick={onConnect}><Send size={12} /> Connect Telegram</button>}
+        {item.uploadError && <p className="media-error" title={item.uploadError}>{item.uploadError}</p>}
+      </div>}
     </article>
   )
 }
