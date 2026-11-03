@@ -15,6 +15,7 @@ import {
   ImagePlus,
   Images,
   LockKeyhole,
+  LayoutGrid,
   Menu,
   MoreHorizontal,
   Pencil,
@@ -26,6 +27,8 @@ import {
   Send,
   Settings2,
   ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
   Star,
   Tag as TagIcon,
   Trash2,
@@ -431,7 +434,7 @@ function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><Images size={18} strokeWidth={2.5} /></div>
-          <span>infinityvault</span>
+          <div className="brand-copy"><strong>infinityvault</strong><span>Private memories</span></div>
         </div>
 
         <div className="sidebar-section">
@@ -470,7 +473,7 @@ function App() {
         </div>
 
         <div className="sidebar-section sidebar-bottom">
-          <p className="eyebrow">Backup</p>
+          <p className="eyebrow">Storage</p>
           <div className="telegram-status">
             <div className="status-icon"><Send size={17} /></div>
             <div>
@@ -498,8 +501,10 @@ function App() {
           <div className="topbar-actions">
             <label className="search-field">
               <Search size={17} />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your library" />
+              <kbd>⌘ K</kbd>
             </label>
+            <button className="icon-button header-tool" type="button" aria-label="Library filters"><SlidersHorizontal size={17} /></button>
             <button className="upload-button" type="button" onClick={() => fileInputRef.current?.click()}>
               <Upload size={17} />
               <span>Add photos & videos</span>
@@ -511,11 +516,14 @@ function App() {
         <div className="content-wrap">
           <section className="welcome-row">
             <div>
-              <p className="section-kicker"><span className="live-dot" /> Private library</p>
-              <h2>Your memories, beautifully organized.</h2>
-              <p className="section-description">Browse every photo and video by the moment it was captured. InfinityVault keeps the original files safe in your Telegram Saved Messages.</p>
+              <p className="section-kicker"><Sparkles size={13} /> Your private library</p>
+              <h2>{pageTitle === 'Your photos' ? 'A beautiful home for your memories.' : pageTitle}</h2>
+              <p className="section-description">Browse, search, and organize your moments. Originals stay protected in your Telegram Saved Messages.</p>
             </div>
-            <div className="privacy-badge"><LockKeyhole size={16} /> Private by design</div>
+            <div className="hero-side">
+              <div className="privacy-badge"><LockKeyhole size={16} /> Private by design</div>
+              <span className="hero-caption">{items.length} memories · {formatSize(totalSize)}</span>
+            </div>
           </section>
 
           <section className="stats-grid" aria-label="Library summary">
@@ -537,13 +545,16 @@ function App() {
           </section>
 
           <div className={selectedIds.size > 0 ? 'toolbar selection-toolbar' : 'toolbar'}>
-            <div className="filter-tabs" role="tablist" aria-label="Media filters">
+            <div className="toolbar-leading">
+              <div className="filter-tabs" role="tablist" aria-label="Media filters">
               {filters.map((option) => (
                 <button key={option.value} type="button" className={filter === option.value ? 'filter-tab selected' : 'filter-tab'} onClick={() => setFilter(option.value)}>
                   {option.label}
                   {option.value === 'all' && <span>{items.length}</span>}
                 </button>
               ))}
+              </div>
+              <span className="results-count">{filteredItems.length} {filteredItems.length === 1 ? 'memory' : 'memories'}</span>
             </div>
             {selectedIds.size > 0 ? (
               <div className="selection-actions">
@@ -560,7 +571,7 @@ function App() {
                  <button type="button" onClick={clearSelection}>Clear</button>
               </div>
             ) : (
-              <button className="sort-button" type="button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}><span>{sortDirection === 'desc' ? 'Newest first' : 'Oldest first'}</span><ChevronDown size={15} /></button>
+              <div className="toolbar-tools"><button className="view-mode-button active" type="button" aria-label="Grid view"><LayoutGrid size={15} /></button><button className="sort-button" type="button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}><span>{sortDirection === 'desc' ? 'Newest first' : 'Oldest first'}</span><ChevronDown size={15} /></button></div>
             )}
           </div>
 
