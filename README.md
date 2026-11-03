@@ -45,7 +45,7 @@ Telegram currently limits individual uploads to 2 GB for free accounts and 4 GB 
 
 ## Local setup
 
-From the InfinityVault project folder, run:
+From the InfinityVault project folder, run this first-time command:
 
 ```bash
 npm run infinityvault -- setup
@@ -57,9 +57,19 @@ The setup command:
 2. hides the API hash while you type;
 3. saves the credentials with restricted permissions outside the repository at `~/.config/infinityvault/.env`;
 4. creates the Python environment and installs dependencies when needed;
-5. starts both the backend and frontend.
+5. starts both the backend and frontend in the same terminal.
 
 Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/).
+
+When startup succeeds, the terminal displays:
+
+```text
+Frontend: http://127.0.0.1:5173/
+Backend:  http://127.0.0.1:8000/
+Press Ctrl+C to stop both services.
+```
+
+The command intentionally remains active while the services are running; it is not waiting for another setup step. Keep this terminal open and use the browser at the frontend URL.
 
 To start again after the first setup:
 
@@ -67,9 +77,21 @@ To start again after the first setup:
 npm run infinityvault -- start
 ```
 
-The `--no-install` option skips dependency checks when they are already installed. `Ctrl+C` stops both services.
+If dependencies are already installed, use:
+
+```bash
+npm run infinityvault -- start --no-install
+```
+
+The `--no-install` option skips dependency checks. Press `Ctrl+C` in the running terminal to stop both services.
 
 Then choose **Connect Telegram** in the browser, enter the phone number connected to Telegram, enter the verification code, and provide the Telegram 2FA password if requested. These are the user account credentials; they are handled by the backend authorization flow and are not saved by the setup CLI.
+
+### Troubleshooting startup
+
+- If the terminal shows the frontend and backend URLs, open `http://127.0.0.1:5173/`; do not wait for the command to return.
+- `GET /health` and `GET /v1/models` messages in the backend log are harmless local environment checks. A `404` for `/v1/models` is expected.
+- If port `5173` or `8000` is already in use, stop the existing InfinityVault process with `Ctrl+C` or close the other process before starting again.
 
 ## Persistence
 
