@@ -16,6 +16,21 @@ from .db import utc_now
 logger = logging.getLogger(__name__)
 
 
+class ThumbnailTooLargeToFetch(Exception):
+    """Raised when an original is too large to download just for a thumbnail."""
+
+# Ceiling for fetching one original from Telegram. Generous for a slow link, but
+# finite: a stalled transfer used to hang the thumbnail queue forever.
+DOWNLOAD_TIMEOUT_SECONDS = 120.0
+
+# Never pull an original this large just to build a thumbnail. Saved Messages
+# doubles as a file dump -- one real library held 3.8 GB of video, including a
+# 1 GB film -- and downloading that to draw a 400px tile stalls the queue for
+# no benefit. Such rows keep a placeholder tile and still play on demand,
+# because the viewer streams from Telegram itself.
+THUMBNAIL_MAX_DOWNLOAD_BYTES = 40 * 1024 * 1024
+
+
 PHONE_PATTERN = re.compile(r"^\+[1-9]\d{6,14}$")
 
 
@@ -215,6 +230,84 @@ class TelegramService:
             raise ValueError("Reconnect Telegram before permanently deleting this original")
         await client.delete_messages("me", [message_id])
 
+    async def _download_with_timeout(self, client, message, target, timeout: float):
+        """Download with a hard ceiling, cleaning up a partial file on timeout."""
+        try:
+            return await asyncio.wait_for(
+                client.download_media(message, file=str(target)), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Telegram download timed out after %ss for message %s; skipping",
+                timeout, getattr(message, "id", "?"),
+            )
+            try:
+                Path(target).unlink(missing_ok=True)
+                Path(str(target) + ".part").unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
+
+    async def ensure_local_original(self, media_row) -> str | None:
+        """Download a row's original from Telegram and record the local path.
+
+        Used by the thumbnail worker for media imported out of Saved Messages,
+        which has a message id but no local file.
+        """
+        message_id = media_row["telegram_message_id"]
+        if not message_id:
+            return None
+        client = await self.get_authorized_client(media_row["client_id"])
+        if not client:
+            return None
+        message = await client.get_messages("me", ids=message_id)
+        if not message or not message.media:
+            return None
+
+        db.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        suffix = Path(media_row["original_name"] or f"restored-{message_id}").suffix.lower()[:12]
+        target = db.UPLOAD_DIR / f"{media_row['id']}{suffix or '.bin'}"
+        # Only a handful of images lack a Telegram-side thumbnail, and those are
+        # usually small. Try the thumbnail first: it makes a 400px tile from a
+        # few KB instead of downloading a 20 MB original over the user's data.
+        is_photo = media_row["media_type"] == "photo"
+        size_bytes = media_row["size_bytes"] or 0
+        if not is_photo and size_bytes > THUMBNAIL_MAX_DOWNLOAD_BYTES:
+            # Signal "skip, do not retry": the worker treats this as a final
+            # state rather than a failure, so the queue moves on immediately.
+            raise ThumbnailTooLargeToFetch(
+                f"{size_bytes // (1024 * 1024)} MB is too large to download for a thumbnail"
+            )
+
+        if is_photo and getattr(message, "document", None) is not None:
+            for size in ("y", "x", "m"):
+                try:
+                    fetched = await client.download_media(message, file=bytes, thumb=size)
+                except Exception:
+                    fetched = None
+                if fetched:
+                    try:
+                        target.write_bytes(fetched)
+                        stored = str(target.relative_to(db.DATA_DIR))
+                        db.set_local_path(media_row["id"], stored)
+                        return stored
+                    except OSError:
+                        break
+
+        # A stalled transfer must not block the whole thumbnail queue: without
+        # this one 20 MB video held up 202 other jobs indefinitely.
+        downloaded = await self._download_with_timeout(
+            client, message, target, timeout=DOWNLOAD_TIMEOUT_SECONDS
+        )
+        if not downloaded:
+            return None
+        try:
+            stored = str(target.relative_to(db.DATA_DIR))
+        except ValueError:
+            stored = str(target)
+        db.set_local_path(media_row["id"], stored)
+        return stored
+
     async def telegram_media_path(self, client_id: str, media_id: str) -> Path:
         media = db.get_media(media_id, client_id)
         if not media:
@@ -334,6 +427,61 @@ class TelegramService:
             "tags": counts["tags"],
         }
 
+    def _describe_unmarked_media(self, message) -> dict | None:
+        """Describe a message that Telegram itself owns, not InfinityVault.
+
+        scan_for_restore() used to skip anything without InfinityVault's caption,
+        which meant media saved to Saved Messages directly was invisible. On a
+        real account that was 386 of 391 items, so "backup" only ever saw its own
+        uploads and could not restore a library the user had already built up.
+
+        Everything needed is on the Telegram message: the date is the capture
+        time, images carry their real pixel size, and videos carry duration and
+        dimensions. Nothing external is consulted.
+        """
+        if message.photo:
+            mime = "image/jpeg"
+            name = None
+            width = height = None
+            duration = None
+            size = 0
+            # Telegram keeps several renditions; the largest is the best guess.
+            for candidate in message.photo.sizes:
+                if getattr(candidate, "w", None) and getattr(candidate, "h", None):
+                    width, height = candidate.w, candidate.h
+            for candidate in message.photo.sizes:
+                if getattr(candidate, "size", None):
+                    size = max(size, candidate.size)
+        elif message.document:
+            mime = (message.file.mime_type if message.file else None) or "application/octet-stream"
+            name = getattr(message.file, "name", None) if message.file else None
+            width = height = duration = None
+            size = getattr(message.file, "size", 0) if message.file else 0
+            for attribute in message.document.attributes:
+                if hasattr(attribute, "w") and hasattr(attribute, "h"):
+                    width, height = attribute.w, attribute.h
+                if hasattr(attribute, "duration"):
+                    duration = attribute.duration
+                if getattr(attribute, "file_name", None):
+                    name = attribute.file_name
+        else:
+            return None
+
+        if not (mime or "").split("/")[0] in {"image", "video"}:
+            return None
+
+        return {
+            "original_name": name,
+            "media_type": "video" if mime.startswith("video/") else "photo",
+            "mime_type": mime,
+            "size_bytes": size or 0,
+            "capture_time": message.date.isoformat() if message.date else None,
+            "width": width,
+            "height": height,
+            "duration_seconds": duration,
+            "album_message_id": message.grouped_id,
+        }
+
     def _parse_backup_caption(self, message) -> dict | None:
         """Read capture time and original name out of an upload caption."""
         text = (message.message or "").strip()
@@ -376,25 +524,45 @@ class TelegramService:
                     metadata_message = message
                 continue
 
-            parsed = self._parse_backup_caption(message)
-            if not parsed:
-                continue
-
             mime = getattr(message.file, "mime_type", None) if message.file else None
             size = getattr(message.file, "size", 0) if message.file else 0
-            is_video = bool(mime and mime.startswith("video/"))
-            found_media.append({
-                "telegram_message_id": message.id,
-                "original_name": parsed["original_name"] or filename or f"telegram-{message.id}",
-                "capture_time": parsed["capture_time"],
-                "media_type": "video" if is_video else "photo",
-                "mime_type": mime or "application/octet-stream",
-                "size_bytes": size,
-            })
 
+            parsed = self._parse_backup_caption(message)
+            if parsed:
+                is_video = bool(mime and mime.startswith("video/"))
+                found_media.append({
+                    "telegram_message_id": message.id,
+                    "original_name": parsed["original_name"] or filename or f"telegram-{message.id}",
+                    "capture_time": parsed["capture_time"],
+                    "media_type": "video" if is_video else "photo",
+                    "mime_type": mime or "application/octet-stream",
+                    "size_bytes": size,
+                    "width": None,
+                    "height": None,
+                    "duration_seconds": None,
+                    "album_message_id": None,
+                    "own_backup": True,
+                })
+                continue
+
+            # Not written by InfinityVault: media the user saved to Telegram
+            # themselves. Adopt it, using Telegram's own metadata.
+            described = self._describe_unmarked_media(message)
+            if not described:
+                continue
+            described["telegram_message_id"] = message.id
+            described["original_name"] = (
+                described["original_name"] or filename or f"telegram-{message.id}"
+            )
+            described["own_backup"] = False
+            found_media.append(described)
+
+        own = sum(1 for item in found_media if item.get("own_backup"))
         return {
             "scanned": seen,
             "media_found": len(found_media),
+            "own_backups": own,
+            "adoptable": len(found_media) - own,
             "has_metadata_backup": metadata_message is not None,
             "metadata_message_id": metadata_message.id if metadata_message else None,
             "media": found_media,
@@ -436,6 +604,10 @@ class TelegramService:
                 size_bytes=item["size_bytes"],
                 capture_time=item["capture_time"] or utc_now(),
                 telegram_message_id=item["telegram_message_id"],
+                width=item.get("width"),
+                height=item.get("height"),
+                duration=item.get("duration_seconds"),
+                album_message_id=item.get("album_message_id"),
             )
             if created:
                 restored += 1
@@ -446,6 +618,7 @@ class TelegramService:
             "metadata_backup": metadata_result,
             "scanned": scan["scanned"],
             "found": scan["media_found"],
+            "adoptable": scan.get("adoptable", 0),
         }
 
     async def _maybe_auto_backup(self, media_id: str) -> None:

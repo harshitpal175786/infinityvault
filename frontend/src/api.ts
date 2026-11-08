@@ -293,6 +293,10 @@ export function listBrokenMedia(): Promise<ApiMedia[]> {
 export interface RestoreScan {
   scanned: number
   media_found: number
+  /** Media InfinityVault itself uploaded (these carry captions). */
+  own_backups?: number
+  /** Media saved to Telegram directly, which can be adopted as-is. */
+  adoptable?: number
   has_metadata_backup: boolean
 }
 

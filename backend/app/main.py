@@ -64,6 +64,9 @@ async def lifespan(app: FastAPI):
         logger.exception("Legacy client id adoption failed")
 
     thumbs = ThumbnailService()
+    # The worker fetches originals for media imported from Saved Messages, which
+    # has no local file until something downloads it.
+    thumbs.telegram = app.state.telegram_service
     app.state.thumbnail_service = thumbs
     await thumbs.start()
 
@@ -1310,7 +1313,12 @@ async def restore_scan(
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> dict:
-    """Inspect Saved Messages for InfinityVault backups without changing anything."""
+    """Inspect Saved Messages without changing anything.
+
+    Reports both InfinityVault's own backups and any media saved to Telegram
+    directly, because the second kind is a user's whole existing library and
+    used to be skipped silently.
+    """
     resolved = resolve_client_id(client_id, query_client_id)
     try:
         result = await telegram_service(request).scan_for_restore(resolved, limit=limit)
@@ -1320,6 +1328,8 @@ async def restore_scan(
     return {
         "scanned": result["scanned"],
         "media_found": result["media_found"],
+        "own_backups": result.get("own_backups", 0),
+        "adoptable": result.get("adoptable", 0),
         "has_metadata_backup": result["has_metadata_backup"],
     }
 

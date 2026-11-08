@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import db
+from .telegram_service import ThumbnailTooLargeToFetch
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,36 @@ class ThumbnailService:
 
         return ""
 
+    async def _ensure_local_copy(self, media_id: str, local_path: str | None) -> str | None:  # noqa: C901
+        """Fetch a restored row's original from Telegram, if it has no local file.
+
+        Media imported from Saved Messages exists only in Telegram: the row is a
+        pointer with a message id. Without this the whole queue failed with "the
+        local original is missing", so 365 imported photos showed no thumbnail
+        and the grid looked broken even though the import had worked.
+        """
+        source = db.resolve_local_path(local_path)
+        if source.is_file():
+            return local_path
+
+        row = db.get_media_any_client(media_id)
+        if not row or not row["telegram_message_id"]:
+            return local_path
+
+        try:
+            # Imported lazily: telegram_service needs Telethon, which is optional
+            # for a local-only library.
+            from .telegram_service import TelegramService  # noqa: PLC0415
+
+            service = getattr(self, "telegram", None) or TelegramService()
+            fetched = await service.ensure_local_original(row)
+        except Exception:
+            logger.debug("Could not fetch original for %s", media_id, exc_info=True)
+            return local_path
+        return fetched or local_path
+
     async def generate(self, media_id: str, local_path: str | None, media_type: str) -> None:
+        local_path = await self._ensure_local_copy(media_id, local_path)
         if not PIL_AVAILABLE:
             raise RuntimeError("Pillow is not installed; thumbnails are disabled.")
         if self._executor is None:
@@ -157,6 +187,12 @@ class ThumbnailService:
                 await asyncio.to_thread(db.mark_thumbnail_running, media_id)
                 try:
                     await self.generate(media_id, job["local_path"], job["media_type"])
+                except ThumbnailTooLargeToFetch as exc:
+                    # Deliberate skip, not a failure: no retry, no repeated
+                    # download of a giant file, and the grid stops waiting.
+                    logger.info("Skipped thumbnail for %s: %s", media_id, exc)
+                    await asyncio.to_thread(db.mark_thumbnail_skipped, media_id, str(exc))
+                    continue
                 except Exception as exc:
                     # A failed thumbnail must never stall the queue; record it
                     # and move to the next item.

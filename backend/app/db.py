@@ -217,6 +217,15 @@ def init_db() -> None:
         for column, statement in migrations.items():
             if column not in columns:
                 connection.execute(statement)
+
+        # Telegram albums are imported as albums, so an imported album needs a
+        # stable key: two albums can legitimately share a display name, but a
+        # grouped_id identifies exactly one burst on one account.
+        album_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(albums)")
+        }
+        if "origin_group" not in album_columns:
+            connection.execute("ALTER TABLE albums ADD COLUMN origin_group TEXT")
         connection.execute(
             "CREATE INDEX IF NOT EXISTS media_items_client_state ON media_items(client_id, is_archived, trashed_at, is_favorite)"
         )
@@ -1461,6 +1470,25 @@ def mark_thumbnail_running(media_id: str) -> None:
         connection.commit()
 
 
+def mark_thumbnail_skipped(media_id: str, reason: str) -> None:
+    """Finish a job deliberately without a thumbnail.
+
+    Distinct from 'failed' so a re-queue pass does not keep re-attempting an
+    original that is too large to fetch. The UI shows a placeholder tile and
+    playback still works, because the viewer streams from Telegram directly.
+    """
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE thumbnail_jobs SET status = 'skipped', last_error = ?, updated_at = ? "
+            "WHERE media_id = ?",
+            (reason, utc_now(), media_id),
+        )
+        connection.execute(
+            "UPDATE media_items SET thumb_state = 'skipped' WHERE id = ?", (media_id,)
+        )
+        connection.commit()
+
+
 def mark_thumbnail_done(media_id: str) -> None:
     now = utc_now()
     with closing(open_db()) as connection:
@@ -1777,9 +1805,19 @@ def insert_restored_media(
     size_bytes: int,
     capture_time: str,
     telegram_message_id: int,
+    width: int | None = None,
+    height: int | None = None,
+    duration: float | None = None,
+    album_message_id: int | None = None,
 ) -> str | None:
     """Create a row reconstructed from a Telegram message. Idempotent on
-    message id, so re-running a restore does not duplicate anything."""
+    message id, so re-running a restore does not duplicate anything.
+
+    Dimensions and duration come from Telegram's own metadata. They matter
+    because a restored row has no local file and no thumbnail yet: without them
+    the timeline cannot lay out tiles or show a duration before anything has
+    been downloaded. album_message_id preserves Telegram albums as albums.
+    """
     with closing(open_db()) as connection:
         existing = connection.execute(
             "SELECT id FROM media_items WHERE client_id = ? AND telegram_message_id = ?",
@@ -1797,14 +1835,71 @@ def insert_restored_media(
                  capture_time, capture_source, width, height, duration, local_path,
                  checksum, description, upload_status, telegram_message_id,
                  file_state, thumb_state, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '', '', '', 'uploaded', ?,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', 'uploaded', ?,
                     'missing', 'pending', ?, ?)
             """,
             (media_id, client_id, original_name, media_type, mime_type, size_bytes,
-             capture_time, "Restored from Telegram", telegram_message_id, now, now),
+             capture_time, "Restored from Telegram", width, height, duration,
+             telegram_message_id, now, now),
         )
+        if album_message_id:
+            _add_to_album_for_group(connection, client_id, media_id, album_message_id)
         connection.commit()
     return media_id
+
+
+def _add_to_album_for_group(
+    connection, client_id: str, media_id: str, grouped_id: int
+) -> None:
+    """Keep a Telegram album together as an InfinityVault album.
+
+    Albums are Telegram's grouped_id, which is shared by every photo sent in one
+    burst. Without this an import turns a 30-photo album into 30 loose photos,
+    losing organisation the user already had.
+    """
+    # The grouped_id is part of the name, so UNIQUE(client_id, name) makes the
+    # lookup idempotent without relying on origin_group existing yet. The date
+    # leads because a raw grouped_id ("Telegram album 13544257181736869") is
+    # meaningless to a person browsing their albums.
+    import datetime as _dt
+
+    stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%d %b %Y")
+    name = f"Telegram album - {stamp} ({grouped_id})"
+    # Name encodes the grouped_id and albums are UNIQUE(client_id, name), so a
+    # plain name lookup is already idempotent and needs no extra column.
+    row = connection.execute(
+        "SELECT id FROM albums WHERE client_id = ? AND name = ?", (client_id, name)
+    ).fetchone()
+    if row:
+        album_id = row["id"]
+    else:
+        album_id = str(uuid4())
+        now = utc_now()
+        connection.execute(
+            "INSERT INTO albums (id, client_id, name, description, created_at, updated_at) "
+            "VALUES (?, ?, ?, '', ?, ?)",
+            (album_id, client_id, name, now, now),
+        )
+    connection.execute(
+        "INSERT OR IGNORE INTO album_media (album_id, media_id, added_at) VALUES (?, ?, ?)",
+        (album_id, media_id, utc_now()),
+    )
+
+
+def set_local_path(media_id: str, local_path: str) -> None:
+    """Record where a media original now lives, and mark it present.
+
+    Imported rows start with no local file, so fetching the original from
+    Telegram has to flip file_state back to 'present' at the same time --
+    otherwise the row keeps claiming to be missing after the file arrives.
+    """
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE media_items SET local_path = ?, file_state = 'present', updated_at = ? "
+            "WHERE id = ?",
+            (local_path, utc_now(), media_id),
+        )
+        connection.commit()
 
 
 def media_counts(client_id: str) -> dict[str, int]:

@@ -103,11 +103,21 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
     try {
       const result = await scanForRestore()
       setScan(result)
-      onNotice(
-        result.media_found
-          ? `Found ${result.media_found} backed-up item${result.media_found === 1 ? '' : 's'} in Telegram.`
-          : 'No InfinityVault backups were found in your Saved Messages.',
-      )
+      // "Adoptable" is the important number: media you saved to Telegram
+      // yourself is a whole library, not something InfinityVault uploaded.
+      const adoptable = result.adoptable ?? 0
+      if (adoptable > 0) {
+        onNotice(
+          `Found ${result.media_found} item${result.media_found === 1 ? '' : 's'} in Telegram, ` +
+            `${adoptable} of them saved directly and ready to import.`,
+        )
+      } else if (result.media_found > 0) {
+        onNotice(
+          `Found ${result.media_found} InfinityVault backup${result.media_found === 1 ? '' : 's'} in Telegram.`,
+        )
+      } else {
+        onNotice('No media was found in your Saved Messages.')
+      }
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'Saved Messages could not be scanned.')
     } finally {
@@ -299,9 +309,10 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
           <div>
             <h3>Restore from Telegram</h3>
             <p className="utility-sub">
-              Rebuilds this library from your Saved Messages. If a metadata backup is found it is
-              applied first, so albums and tags come back with the photos. Without one, only the
-              photos themselves can be recovered.
+              Rebuilds this library from your Saved Messages. Anything you saved there yourself is
+              imported too, using Telegram&rsquo;s own dates and dimensions, so an existing collection
+              comes back without being re-uploaded. Albums you sent as a group stay together as
+              albums, and nothing is ever deleted.
             </p>
           </div>
         </div>
@@ -310,11 +321,15 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
           <div className="utility-stats">
             <div className="utility-stat">
               <span className="utility-stat-value">{scan.media_found}</span>
-              <span className="utility-stat-label">Backed-up items</span>
+              <span className="utility-stat-label">Items in Saved Messages</span>
             </div>
             <div className="utility-stat">
               <span className="utility-stat-value">{scan.has_metadata_backup ? 'Yes' : 'No'}</span>
               <span className="utility-stat-label">Metadata backup found</span>
+            </div>
+            <div className="utility-stat">
+              <span className="utility-stat-value">{scan.adoptable ?? 0}</span>
+              <span className="utility-stat-label">Saved to Telegram by you</span>
             </div>
             <div className="utility-stat">
               <span className="utility-stat-value">{scan.scanned}</span>
