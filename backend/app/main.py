@@ -672,6 +672,50 @@ async def integrity_check(
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
+@app.post("/api/backup/metadata")
+async def backup_metadata(
+    request: Request,
+    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+) -> dict:
+    """Upload a JSON snapshot of the local index to Telegram."""
+    try:
+        return await telegram_service(request).backup_metadata(client_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.get("/api/restore/scan")
+async def restore_scan(
+    request: Request,
+    limit: int = Query(default=3000, ge=1, le=20000),
+    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+) -> dict:
+    """Inspect Saved Messages for InfinityVault backups without changing anything."""
+    try:
+        result = await telegram_service(request).scan_for_restore(client_id, limit=limit)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    # The per-item list can be large; the UI only needs the counts.
+    return {
+        "scanned": result["scanned"],
+        "media_found": result["media_found"],
+        "has_metadata_backup": result["has_metadata_backup"],
+    }
+
+
+@app.post("/api/restore/apply")
+async def restore_apply(
+    request: Request,
+    limit: int = Query(default=3000, ge=1, le=20000),
+    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+) -> dict:
+    """Rebuild the local index from Telegram. Idempotent, never deletes."""
+    try:
+        return await telegram_service(request).apply_restore(client_id, limit=limit)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @app.get("/api/integrity/status")
 def integrity_status(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
     return db.integrity_summary(client_id)

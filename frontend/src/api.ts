@@ -227,3 +227,34 @@ export function checkIntegrity(limit = 500): Promise<IntegritySummary & { total:
 export function listBrokenMedia(): Promise<ApiMedia[]> {
   return request<ApiMedia[]>('/api/integrity/broken')
 }
+
+export interface RestoreScan {
+  scanned: number
+  media_found: number
+  has_metadata_backup: boolean
+}
+
+export interface MetadataBackupResult {
+  message_id: number
+  filename: string
+  media: number
+  albums: number
+  tags: number
+}
+
+export function backupMetadata(): Promise<MetadataBackupResult> {
+  return request<MetadataBackupResult>('/api/backup/metadata', { method: 'POST' })
+}
+
+export function scanForRestore(): Promise<RestoreScan> {
+  return request<RestoreScan>('/api/restore/scan')
+}
+
+export function applyRestore(): Promise<{
+  restored_media: number
+  scanned: number
+  found: number
+  metadata_backup: { media: number; albums: number; tags: number } | null
+}> {
+  return request('/api/restore/apply', { method: 'POST' })
+}

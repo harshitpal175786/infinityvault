@@ -6,7 +6,7 @@
 
 **Plan:** `docs/PRD-PHASES.md`
 **Baseline commit:** `d68fac7`
-**Current phase:** Phase 3 (identity/auth) next — Phase 2 complete
+**Current phase:** Phase 3 (identity/auth) next — 2.3 disaster recovery done
 
 ---
 
@@ -20,6 +20,7 @@
 | 2. Telegram cold store | ✅ Done | — | 2.1 + 2.2 verified |
 | 2.1 Thumbnails | ✅ | — | Grid never fetches originals |
 | 2.2 Integrity check | ✅ | — | Utilities page |
+| 2.3 Disaster recovery | ✅ | — | Backup + restore verified |
 | 3. Identity / auth | ⬜ Not started | — | Deploy gate |
 | 3.1 Token auth | ⬜ | — | |
 | 3.2 Single-user cleanup | ⬜ | — | |
@@ -189,6 +190,41 @@ _Log:_
 - Utilities layout changed from a hard `max-width: 780px` to
   `width: min(100%, 1100px)` so it fills the content area instead of leaving a
   large empty region on wide screens.
+
+---
+
+## Phase 2.3 — Disaster recovery
+
+- [x] `export_metadata()` / `import_metadata()` — JSON snapshot round trip
+- [x] `backup_metadata()` uploads the snapshot to Saved Messages
+- [x] `scan_for_restore()` finds backups without changing anything
+- [x] `apply_restore()` applies metadata first, then rebuilds from captions
+- [x] Idempotent on `telegram_message_id`
+- [x] Utilities UI: backup, scan, restore, with honest copy
+
+_Log:_
+- 2026-02-14 — Added after the user asked "what happens if someone deletes
+  everything and reinstalls?". Verified the answer was bad: nothing in the
+  codebase ever called `iter_messages`, so a fresh DB could not rediscover its
+  own backups, and albums/tags/favourites existed only on one disk.
+- Verified round trip: 3 media + 1 album + 1 tag + favourite + description
+  exported, DB deleted, re-imported — all restored including favourite and
+  description.
+- Verified caption-scan restore with a mocked client: found 2 backups, ignored
+  an unrelated personal note, restored photo + video with capture times, and a
+  second run restored 0 (idempotent).
+- Verified metadata takes priority: with a metadata backup present, restore
+  returns `restored_media: 0` because those rows already exist, so no
+  duplicates are created alongside the imported ones.
+- Verified in Chromium: three cards render, "Restore library" is disabled until
+  a scan runs, the no-Telegram path shows an actionable notice, and buttons do
+  not stick in a loading state.
+- **Fixed:** `primary-button` / `ghost-button` had no base CSS rule at all, so
+  they rendered as browser-default controls with the icon crowding the label.
+  Added scoped `.utility-actions` styles using existing tokens.
+- **Honest limit, stated in the UI:** without a metadata backup, restore
+  recovers photos only — albums, tags and favourites cannot be rebuilt from a
+  caption.
 
 ---
 

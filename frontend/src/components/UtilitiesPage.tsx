@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, CheckCircle2, HardDrive, RefreshCw, ShieldCheck } from 'lucide-react'
-import { checkIntegrity, getIntegrityStatus, listBrokenMedia } from '../api'
-import type { ApiMedia, IntegritySummary } from '../api'
+import { AlertCircle, CheckCircle2, CloudUpload, DatabaseBackup, HardDrive, RefreshCw, ShieldCheck } from 'lucide-react'
+import { applyRestore, backupMetadata, checkIntegrity, getIntegrityStatus, listBrokenMedia, scanForRestore } from '../api'
+import type { ApiMedia, IntegritySummary, RestoreScan } from '../api'
 
 function formatChecked(value: string | null): string {
   if (!value) return 'Never checked'
@@ -26,6 +26,8 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
   const [summary, setSummary] = useState<IntegritySummary | null>(null)
   const [broken, setBroken] = useState<ApiMedia[]>([])
   const [running, setRunning] = useState(false)
+  const [scan, setScan] = useState<RestoreScan | null>(null)
+  const [busy, setBusy] = useState<'scan' | 'restore' | 'backup' | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -58,6 +60,53 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
       onNotice(error instanceof Error ? error.message : 'The check could not run.')
     } finally {
       setRunning(false)
+    }
+  }
+
+  async function runBackup() {
+    setBusy('backup')
+    try {
+      const result = await backupMetadata()
+      onNotice(`Metadata backed up to Telegram: ${result.media} media, ${result.albums} albums, ${result.tags} tags.`)
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'The backup could not be uploaded.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function runScan() {
+    setBusy('scan')
+    try {
+      const result = await scanForRestore()
+      setScan(result)
+      onNotice(
+        result.media_found
+          ? `Found ${result.media_found} backed-up item${result.media_found === 1 ? '' : 's'} in Telegram.`
+          : 'No InfinityVault backups were found in your Saved Messages.',
+      )
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'Saved Messages could not be scanned.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function runRestore() {
+    setBusy('restore')
+    try {
+      const result = await applyRestore()
+      setScan(await scanForRestore().catch(() => scan))
+      await load()
+      const parts = [`${result.restored_media} restored`]
+      if (result.metadata_backup) {
+        parts.push(`${result.metadata_backup.albums} albums`, `${result.metadata_backup.tags} tags`)
+      }
+      onNotice(`Restore finished: ${parts.join(', ')}.`)
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'The restore could not be completed.')
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -99,6 +148,74 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
             {running ? 'Checking…' : 'Check library'}
           </button>
           <span className="utility-meta">{formatChecked(summary?.last_checked_at ?? null)}</span>
+        </div>
+      </section>
+
+      <section className="utility-card">
+        <div className="utility-card-head">
+          <span className="utility-icon"><CloudUpload size={18} /></span>
+          <div>
+            <h3>Metadata backup</h3>
+            <p className="utility-sub">
+              Saves albums, tags, favourites and descriptions to Telegram as a small JSON file.
+              Your photos already live in Telegram, but this organisation exists only on this
+              machine — without it, reinstalling would lose it permanently.
+            </p>
+          </div>
+        </div>
+        <div className="utility-actions">
+          <button type="button" className="primary-button" onClick={() => void runBackup()} disabled={busy !== null}>
+            <DatabaseBackup size={14} />
+            {busy === 'backup' ? 'Uploading…' : 'Back up metadata'}
+          </button>
+        </div>
+      </section>
+
+      <section className="utility-card">
+        <div className="utility-card-head">
+          <span className="utility-icon"><RefreshCw size={18} /></span>
+          <div>
+            <h3>Restore from Telegram</h3>
+            <p className="utility-sub">
+              Rebuilds this library from your Saved Messages. If a metadata backup is found it is
+              applied first, so albums and tags come back with the photos. Without one, only the
+              photos themselves can be recovered.
+            </p>
+          </div>
+        </div>
+
+        {scan && (
+          <div className="utility-stats">
+            <div className="utility-stat">
+              <span className="utility-stat-value">{scan.media_found}</span>
+              <span className="utility-stat-label">Backed-up items</span>
+            </div>
+            <div className="utility-stat">
+              <span className="utility-stat-value">{scan.has_metadata_backup ? 'Yes' : 'No'}</span>
+              <span className="utility-stat-label">Metadata backup found</span>
+            </div>
+            <div className="utility-stat">
+              <span className="utility-stat-value">{scan.scanned}</span>
+              <span className="utility-stat-label">Messages scanned</span>
+            </div>
+          </div>
+        )}
+
+        <div className="utility-actions">
+          <button type="button" className="ghost-button" onClick={() => void runScan()} disabled={busy !== null}>
+            {busy === 'scan' ? 'Scanning…' : 'Scan Saved Messages'}
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => void runRestore()}
+            disabled={busy !== null || !scan || scan.media_found === 0}
+          >
+            {busy === 'restore' ? 'Restoring…' : 'Restore library'}
+          </button>
+          {scan && !scan.has_metadata_backup && scan.media_found > 0 && (
+            <span className="utility-meta">No metadata backup: albums and tags cannot be recovered.</span>
+          )}
         </div>
       </section>
 

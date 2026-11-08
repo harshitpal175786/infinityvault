@@ -10,6 +10,7 @@ from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
 
 from . import db
+from .db import utc_now
 
 
 PHONE_PATTERN = re.compile(r"^\+[1-9]\d{6,14}$")
@@ -283,6 +284,165 @@ class TelegramService:
                 checked[state] = checked.get(state, 0) + 1
 
         return {**checked, "total": len(rows), **db.integrity_summary(client_id)}
+
+    async def backup_metadata(self, client_id: str) -> dict:
+        """Upload a JSON snapshot of the local index to Saved Messages.
+
+        Everything that exists only in SQLite -- albums, tags, favourites,
+        descriptions, people names -- lives here. Without this, deleting
+        backend/data loses that data permanently even though the originals
+        survive in Telegram.
+        """
+        client = await self.get_authorized_client(client_id)
+        if not client:
+            raise ValueError("Reconnect Telegram before backing up your metadata")
+
+        import json
+        import tempfile
+
+        payload = db.export_metadata(client_id)
+        payload["client_id"] = client_id
+        counts = db.media_counts(client_id)
+
+        stamp = utc_now().replace(":", "-").replace(".", "-")
+        filename = f"infinityvault-metadata-{stamp}.json"
+        temp_path = db.DATA_DIR / filename
+        temp_path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+        try:
+            message = await client.send_file(
+                "me",
+                str(temp_path),
+                caption=(
+                    "InfinityVault metadata backup\n"
+                    f"Exported: {payload['exported_at']}\n"
+                    f"Media: {counts['media']} | Albums: {counts['albums']} | Tags: {counts['tags']}"
+                ),
+                force_document=True,
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        return {
+            "message_id": message.id,
+            "filename": filename,
+            "media": counts["media"],
+            "albums": counts["albums"],
+            "tags": counts["tags"],
+        }
+
+    def _parse_backup_caption(self, message) -> dict | None:
+        """Read capture time and original name out of an upload caption."""
+        text = (message.message or "").strip()
+        if db.RESTORE_CAPTION_MARKER not in text:
+            return None
+        capture_time, original = None, None
+        for line in text.splitlines():
+            if line.startswith("Captured:"):
+                capture_time = line.split(":", 1)[1].strip()
+            elif line.startswith("Original:"):
+                original = line.split(":", 1)[1].strip()
+        return {"capture_time": capture_time, "original_name": original}
+
+    async def scan_for_restore(self, client_id: str, limit: int = 3000) -> dict:
+        """Find InfinityVault backups in Saved Messages.
+
+        Two sources, in order of value:
+          1. A metadata backup document -> lossless (albums, tags, favourites).
+          2. Upload captions -> rebuilds the photos, but not the organisation.
+
+        Only reads message metadata; nothing is downloaded unless restoring.
+        """
+        client = await self.get_authorized_client(client_id)
+        if not client:
+            raise ValueError("Reconnect Telegram before scanning for backups")
+
+        found_media: list[dict] = []
+        metadata_message = None
+        seen = 0
+
+        async for message in client.iter_messages("me", limit=limit):
+            seen += 1
+            if not message.media:
+                continue
+
+            filename = getattr(message.file, "name", None) if message.file else None
+            if filename and filename.startswith("infinityvault-metadata-") and filename.endswith(".json"):
+                # Keep the newest metadata backup.
+                if metadata_message is None:
+                    metadata_message = message
+                continue
+
+            parsed = self._parse_backup_caption(message)
+            if not parsed:
+                continue
+
+            mime = getattr(message.file, "mime_type", None) if message.file else None
+            size = getattr(message.file, "size", 0) if message.file else 0
+            is_video = bool(mime and mime.startswith("video/"))
+            found_media.append({
+                "telegram_message_id": message.id,
+                "original_name": parsed["original_name"] or filename or f"telegram-{message.id}",
+                "capture_time": parsed["capture_time"],
+                "media_type": "video" if is_video else "photo",
+                "mime_type": mime or "application/octet-stream",
+                "size_bytes": size,
+            })
+
+        return {
+            "scanned": seen,
+            "media_found": len(found_media),
+            "has_metadata_backup": metadata_message is not None,
+            "metadata_message_id": metadata_message.id if metadata_message else None,
+            "media": found_media,
+        }
+
+    async def apply_restore(self, client_id: str, limit: int = 3000) -> dict:
+        """Rebuild the local index from Saved Messages."""
+        scan = await self.scan_for_restore(client_id, limit=limit)
+
+        # Prefer a real metadata backup: it carries albums, tags and favourites.
+        metadata_result = None
+        if scan["metadata_message_id"]:
+            client = await self.get_authorized_client(client_id)
+            if client:
+                import json
+                import tempfile
+
+                message = await client.get_messages("me", ids=scan["metadata_message_id"])
+                if message and message.media:
+                    temp_path = db.DATA_DIR / f"restore-{message.id}.json"
+                    try:
+                        downloaded = await client.download_media(message, file=str(temp_path))
+                        if downloaded:
+                            payload = json.loads(Path(temp_path).read_text(encoding="utf-8"))
+                            metadata_result = db.import_metadata(client_id, payload)
+                    finally:
+                        Path(temp_path).unlink(missing_ok=True)
+
+        # If a metadata backup was imported, its rows already carry the same
+        # telegram_message_id. insert_restored_media() is idempotent on that
+        # id, so the caption pass below will skip them instead of duplicating.
+        restored = 0
+        for item in scan["media"]:
+            created = db.insert_restored_media(
+                client_id,
+                original_name=item["original_name"],
+                media_type=item["media_type"],
+                mime_type=item["mime_type"],
+                size_bytes=item["size_bytes"],
+                capture_time=item["capture_time"] or utc_now(),
+                telegram_message_id=item["telegram_message_id"],
+            )
+            if created:
+                restored += 1
+                db.enqueue_thumbnail_job(created)
+
+        return {
+            "restored_media": restored,
+            "metadata_backup": metadata_result,
+            "scanned": scan["scanned"],
+            "found": scan["media_found"],
+        }
 
     async def _upload_worker(self) -> None:
         while True:

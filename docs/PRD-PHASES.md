@@ -180,6 +180,35 @@ flagged, and the UI offers "re-upload from local copy" when one exists.
 
 ---
 
+## Phase 2.3 — Disaster recovery (added after the fact)
+
+**Goal:** losing `backend/data` must not mean losing the library.
+**Effort:** M · **Risk:** low · **Touches:** `db.py`, `telegram_service.py`, Utilities
+
+The originals live in Telegram, but **only SQLite knew they existed** —
+nothing ever listed Saved Messages. Deleting `backend/data` therefore left the
+photos intact but invisible, and destroyed albums, tags, favourites,
+descriptions and people names permanently.
+
+Two halves:
+
+### 2.3.1 Metadata backup
+Serialise the local index (media, albums, album_media, tags, media_tags,
+people) to JSON and upload it to Saved Messages as a document. This is the only
+copy of that organisation, so it belongs in the same durable store as the
+originals.
+
+### 2.3.2 Restore
+Scan Saved Messages for `InfinityVault backup` captions and
+`infinityvault-metadata-*.json` documents. Apply the metadata backup first
+(lossless), then rebuild any media rows found via captions. Idempotent on
+`telegram_message_id`, so re-running never duplicates.
+
+**Done when:** with the database deleted, restore brings back media, albums,
+tags and favourites; without a metadata backup, it still recovers the photos.
+
+---
+
 ## Phase 3 — Identity (auth)
 
 **Goal:** the library is not readable by anything that knows a URL.

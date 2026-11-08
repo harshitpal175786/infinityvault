@@ -1338,3 +1338,201 @@ def list_broken_media(client_id: str) -> list[sqlite3.Row]:
             "ORDER BY capture_time DESC",
             (client_id,),
         ).fetchall())
+
+
+# ---------------------------------------------------------------------------
+# Restore and metadata backup
+#
+# Everything that lives ONLY in SQLite is lost if backend/data is deleted:
+# albums, tags, favourites, descriptions, people names. The originals survive
+# in Telegram, but Telegram knows nothing about them. Two mechanisms close
+# that gap:
+#
+#   1. Metadata backup -- serialise the local index to JSON and upload it to
+#      Saved Messages. Lossless recovery.
+#   2. Restore scan -- read Saved Messages back. Prefers a metadata backup;
+#      falls back to rebuilding from upload captions, which recovers the
+#      photos but not albums/tags/favourites.
+# ---------------------------------------------------------------------------
+
+RESTORE_CAPTION_MARKER = "InfinityVault backup"
+
+
+def export_metadata(client_id: str) -> dict[str, Any]:
+    """A portable snapshot of everything that exists only in SQLite."""
+    with closing(open_db()) as connection:
+        media = connection.execute(
+            "SELECT id, original_name, media_type, mime_type, size_bytes, capture_time, "
+            "capture_source, width, height, duration, checksum, is_favorite, is_archived, "
+            "trashed_at, description, folder_path, latitude, longitude, "
+            "telegram_message_id, upload_status FROM media_items WHERE client_id = ?",
+            (client_id,),
+        ).fetchall()
+        albums = connection.execute(
+            "SELECT id, name, description, created_at FROM albums WHERE client_id = ?",
+            (client_id,),
+        ).fetchall()
+        album_media = connection.execute(
+            "SELECT album_id, media_id FROM album_media WHERE album_id IN "
+            "(SELECT id FROM albums WHERE client_id = ?)",
+            (client_id,),
+        ).fetchall()
+        tags = connection.execute(
+            "SELECT id, name FROM tags WHERE client_id = ?", (client_id,)
+        ).fetchall()
+        media_tags = connection.execute(
+            "SELECT tag_id, media_id FROM media_tags WHERE tag_id IN "
+            "(SELECT id FROM tags WHERE client_id = ?)",
+            (client_id,),
+        ).fetchall()
+        people = connection.execute(
+            "SELECT id, name, cover_face_id FROM people WHERE client_id = ?", (client_id,)
+        ).fetchall()
+
+    return {
+        "format": "infinityvault-metadata",
+        "version": 1,
+        "exported_at": utc_now(),
+        "client_id": client_id,
+        "media": [dict(row) for row in media],
+        "albums": [dict(row) for row in albums],
+        "album_media": [dict(row) for row in album_media],
+        "tags": [dict(row) for row in tags],
+        "media_tags": [dict(row) for row in media_tags],
+        "people": [dict(row) for row in people],
+    }
+
+
+def import_metadata(client_id: str, payload: dict[str, Any]) -> dict[str, int]:
+    """Merge a snapshot back in. Existing rows win, so a restore never
+    overwrites newer local edits with older backup data."""
+    if payload.get("format") != "infinityvault-metadata":
+        raise ValueError("That file is not an InfinityVault metadata backup")
+
+    counts = {"media": 0, "albums": 0, "tags": 0, "album_links": 0, "tag_links": 0}
+    now = utc_now()
+    with closing(open_db()) as connection:
+        for row in payload.get("media", []):
+            exists = connection.execute(
+                "SELECT 1 FROM media_items WHERE id = ?", (row["id"],)
+            ).fetchone()
+            if exists:
+                continue
+            connection.execute(
+                """
+                INSERT INTO media_items
+                    (id, client_id, original_name, media_type, mime_type, size_bytes,
+                     capture_time, capture_source, width, height, duration, local_path,
+                     checksum, is_favorite, is_archived, trashed_at, description,
+                     folder_path, latitude, longitude, telegram_message_id,
+                     upload_status, file_state, thumb_state, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"], client_id, row["original_name"], row["media_type"],
+                    row["mime_type"], row["size_bytes"], row["capture_time"],
+                    row["capture_source"], row.get("width"), row.get("height"),
+                    row.get("duration"), "", row.get("checksum") or "",
+                    row.get("is_favorite") or 0, row.get("is_archived") or 0,
+                    row.get("trashed_at"), row.get("description") or "",
+                    row.get("folder_path"), row.get("latitude"), row.get("longitude"),
+                    row.get("telegram_message_id"), row.get("upload_status") or "uploaded",
+                    "missing", "pending", now, now,
+                ),
+            )
+            counts["media"] += 1
+
+        for row in payload.get("albums", []):
+            exists = connection.execute("SELECT 1 FROM albums WHERE id = ?", (row["id"],)).fetchone()
+            if not exists:
+                connection.execute(
+                    "INSERT INTO albums (id, client_id, name, description, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (row["id"], client_id, row["name"], row.get("description") or "",
+                     row.get("created_at") or now, now),
+                )
+                counts["albums"] += 1
+
+        for row in payload.get("tags", []):
+            exists = connection.execute("SELECT 1 FROM tags WHERE id = ?", (row["id"],)).fetchone()
+            if not exists:
+                connection.execute(
+                    "INSERT INTO tags (id, client_id, name, created_at) VALUES (?, ?, ?, ?)",
+                    (row["id"], client_id, row["name"], now),
+                )
+                counts["tags"] += 1
+
+        for row in payload.get("album_media", []):
+            try:
+                connection.execute(
+                    "INSERT OR IGNORE INTO album_media (album_id, media_id) VALUES (?, ?)",
+                    (row["album_id"], row["media_id"]),
+                )
+                counts["album_links"] += 1
+            except sqlite3.Error:
+                pass
+
+        for row in payload.get("media_tags", []):
+            try:
+                connection.execute(
+                    "INSERT OR IGNORE INTO media_tags (tag_id, media_id) VALUES (?, ?)",
+                    (row["tag_id"], row["media_id"]),
+                )
+                counts["tag_links"] += 1
+            except sqlite3.Error:
+                pass
+
+        connection.commit()
+    return counts
+
+
+def insert_restored_media(
+    client_id: str,
+    original_name: str,
+    media_type: str,
+    mime_type: str,
+    size_bytes: int,
+    capture_time: str,
+    telegram_message_id: int,
+) -> str | None:
+    """Create a row reconstructed from a Telegram message. Idempotent on
+    message id, so re-running a restore does not duplicate anything."""
+    with closing(open_db()) as connection:
+        existing = connection.execute(
+            "SELECT id FROM media_items WHERE client_id = ? AND telegram_message_id = ?",
+            (client_id, telegram_message_id),
+        ).fetchone()
+        if existing:
+            return None
+
+        media_id = str(uuid4())
+        now = utc_now()
+        connection.execute(
+            """
+            INSERT INTO media_items
+                (id, client_id, original_name, media_type, mime_type, size_bytes,
+                 capture_time, capture_source, width, height, duration, local_path,
+                 checksum, description, upload_status, telegram_message_id,
+                 file_state, thumb_state, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '', '', '', 'uploaded', ?,
+                    'missing', 'pending', ?, ?)
+            """,
+            (media_id, client_id, original_name, media_type, mime_type, size_bytes,
+             capture_time, "Restored from Telegram", telegram_message_id, now, now),
+        )
+        connection.commit()
+    return media_id
+
+
+def media_counts(client_id: str) -> dict[str, int]:
+    with closing(open_db()) as connection:
+        row = connection.execute(
+            "SELECT COUNT(*) AS n FROM media_items WHERE client_id = ?", (client_id,)
+        ).fetchone()
+        albums = connection.execute(
+            "SELECT COUNT(*) AS n FROM albums WHERE client_id = ?", (client_id,)
+        ).fetchone()
+        tags = connection.execute(
+            "SELECT COUNT(*) AS n FROM tags WHERE client_id = ?", (client_id,)
+        ).fetchone()
+    return {"media": row["n"], "albums": albums["n"], "tags": tags["n"]}

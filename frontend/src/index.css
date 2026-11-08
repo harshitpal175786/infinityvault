@@ -1909,3 +1909,45 @@
   .utility-card { padding: 18px 16px; }
   .utility-stats { grid-template-columns: 1fr; }
 }
+
+/* Utility action buttons. These sit in a card, not a modal, so they must be
+   inline-width and must not inherit .modal-secondary's full-width/margin. */
+.utility-actions .primary-button,
+.utility-actions .ghost-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  border: 1px solid var(--outline-strong);
+  background: var(--surface);
+  color: var(--on-surface);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.utility-actions .primary-button {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.utility-actions .primary-button:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.utility-actions .ghost-button:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.utility-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Keep the icon from crowding the label. */
+.utility-actions button svg {
+  flex: 0 0 auto;
+}
