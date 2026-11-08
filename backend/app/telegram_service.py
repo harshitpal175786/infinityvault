@@ -248,11 +248,17 @@ class TelegramService:
                 pass
             return None
 
-    async def ensure_local_original(self, media_row) -> str | None:
+    async def ensure_local_original(self, media_row, allow_thumbnail: bool = False) -> str | None:
         """Download a row's original from Telegram and record the local path.
 
-        Used by the thumbnail worker for media imported out of Saved Messages,
-        which has a message id but no local file.
+        Used by workers for media imported out of Saved Messages, which has a
+        message id but no local file.
+
+        allow_thumbnail lets the thumbnail worker accept Telegram's small
+        rendition instead of the full file. It is OFF by default because a
+        consumer that needs real pixels (face detection) must never be handed a
+        320x240 thumbnail: storing one as the "original" made every face job
+        come back empty.
         """
         message_id = media_row["telegram_message_id"]
         if not message_id:

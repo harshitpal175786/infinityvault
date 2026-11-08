@@ -145,7 +145,9 @@ class ThumbnailService:
             from .telegram_service import TelegramService  # noqa: PLC0415
 
             service = getattr(self, "telegram", None) or TelegramService()
-            fetched = await service.ensure_local_original(row)
+            # Thumbnails only need a small image, so Telegram's own rendition is
+            # enough and saves downloading megabytes over the user's data.
+            fetched = await service.ensure_local_original(row, allow_thumbnail=True)
         except Exception:
             logger.debug("Could not fetch original for %s", media_id, exc_info=True)
             return local_path

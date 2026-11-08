@@ -50,6 +50,8 @@ class FaceService:
         self._load_error: str | None = None
         self._load_attempted = False
         self._executor: ThreadPoolExecutor | None = None
+        # Set whenever a job finishes; consumed once the queue drains.
+        self._pending_cluster: str | None = None
         self.worker_task: asyncio.Task[None] | None = None
         self._running = False
 
@@ -138,8 +140,10 @@ class FaceService:
 
         app = self._ensure_model()
 
-        path = Path(image_path)
-        if not path.exists():
+        # Local paths are stored relative so the data directory can move.
+        # Resolving with Path() alone would look under the process CWD instead.
+        path = db.resolve_local_path(image_path)
+        if not path.is_file():
             raise FileNotFoundError("The local image file is missing")
 
         # Downscale before detection: 640px is plenty for face boxes and is
@@ -198,19 +202,59 @@ class FaceService:
             self._executor.shutdown(wait=False)
             self._executor = None
 
+    async def _ensure_local_copy(self, media_id: str, local_path: str | None) -> str | None:
+        """Fetch the original from Telegram when a row has no local file.
+
+        Media imported out of Saved Messages is a pointer with a message id and
+        nothing on disk, so every face job for it failed with "the local image
+        file is missing" -- 325 of them, which is why no faces were ever found.
+        """
+        source = db.resolve_local_path(local_path)
+        if source.is_file():
+            return local_path
+
+        row = db.get_media_any_client(media_id)
+        if not row or not row["telegram_message_id"]:
+            return local_path
+
+        # Serial worker, so one download at a time: nothing else competes.
+        try:
+            from .telegram_service import TelegramService  # noqa: PLC0415
+
+            service = getattr(self, "telegram", None) or TelegramService()
+            # Faces need real pixels. Accepting Telegram's 320x240 rendition here
+            # is what made every detection come back empty.
+            fetched = await service.ensure_local_original(row, allow_thumbnail=False)
+        except Exception:
+            logger.debug("Could not fetch original for face job %s", media_id, exc_info=True)
+            return local_path
+        return fetched or local_path
+
     async def _worker(self) -> None:
         """Serial worker. One face at a time keeps 8 GB machines comfortable."""
         while self._running:
             try:
                 job = await asyncio.to_thread(db.next_face_job)
                 if not job:
+                    # The queue just drained: group what was just detected.
+                    # Clustering used to be reachable only through an explicit
+                    # API call, so a finished scan left 304 faces unassigned and
+                    # the People page empty unless someone pressed a button.
+                    if self._pending_cluster:
+                        client_id = self._pending_cluster
+                        self._pending_cluster = None
+                        try:
+                            await self.cluster(client_id)
+                        except Exception:
+                            logger.exception("Automatic face clustering failed")
                     await asyncio.sleep(3)
                     continue
 
                 media_id = job["media_id"]
                 await asyncio.to_thread(db.mark_face_job_running, media_id)
                 try:
-                    faces = await self.analyse(job["local_path"])
+                    local_path = await self._ensure_local_copy(media_id, job["local_path"])
+                    faces = await self.analyse(local_path)
                 except FaceUnavailable as exc:
                     # Missing deps must not spin: park the job with a reason.
                     await asyncio.to_thread(db.mark_face_job_failed, media_id, str(exc))
@@ -222,6 +266,7 @@ class FaceService:
 
                 await asyncio.to_thread(db.replace_faces_for_media, job["client_id"], media_id, faces)
                 await asyncio.to_thread(db.mark_face_job_done, media_id)
+                self._pending_cluster = job["client_id"]
             except asyncio.CancelledError:
                 raise
             except Exception:

@@ -71,6 +71,9 @@ async def lifespan(app: FastAPI):
     await thumbs.start()
 
     faces = FaceService()
+    # Face jobs for imported media need the original fetched from Telegram
+    # first, since those rows have a message id but nothing on disk.
+    faces.telegram = app.state.telegram_service
     app.state.face_service = faces
     await faces.start()
 
