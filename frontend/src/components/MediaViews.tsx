@@ -113,7 +113,21 @@ export function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView
             />}
         {item.type === 'video' && <div className="video-overlay"><Play size={14} fill="currentColor" /></div>}
         {item.type === 'video' && item.duration !== undefined && <span className="duration-chip">{formatDuration(item.duration)}</span>}
-        {item.uploadStatus !== 'uploaded' && <span className={`backup-chip status-${item.uploadStatus}`}>{statusIcon} {statusLabel(item.uploadStatus)}</span>}
+        {item.uploadStatus !== 'uploaded' && (
+          <span className={`backup-chip status-${item.uploadStatus}`}>
+            {statusIcon}{' '}
+            {/* Byte progress while in flight, so a slow upload is visibly
+                different from a stalled one. */}
+            {item.uploadStatus === 'queued' && typeof item.uploadProgress === 'number' && item.uploadProgress > 0
+              ? `${Math.round(item.uploadProgress * 100)}%`
+              : statusLabel(item.uploadStatus)}
+          </span>
+        )}
+        {item.uploadStatus === 'queued' && typeof item.uploadProgress === 'number' && item.uploadProgress > 0 && (
+          <span className="tile-progress" aria-hidden="true">
+            <span style={{ width: `${Math.round(item.uploadProgress * 100)}%` }} />
+          </span>
+        )}
         <button
           className={selected ? 'select-button selected' : 'select-button'}
           type="button"

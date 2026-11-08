@@ -1,6 +1,7 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
+  Loader2,
   Archive,
   Check,
   ChevronDown,
@@ -51,6 +52,9 @@ import { useInfiniteScroll } from './hooks/useInfiniteScroll'
 
 /** Local key for recent queries. Nothing is sent to the server. */
 const RECENT_SEARCH_KEY = 'infinityvault.recent-searches'
+
+/** How many uploads may run at once. Chosen for an 8 GB machine. */
+const MAX_PARALLEL_UPLOADS = 2
 import { useToast } from './components/Toast'
 import { ContextMenu, type MenuAction } from './components/ContextMenu'
 import { AlbumsPage } from './components/AlbumsPage'
@@ -366,6 +370,11 @@ function App() {
     void refreshLibrary(false)
   }, [searchTerm])
 
+  // Upload queue summary: in flight, waiting, and failed.
+  const uploadingCount = items.filter((item) => item.uploadStatus === 'queued').length
+  const waitingCount = items.filter((item) => item.uploadStatus === 'waiting_for_telegram').length
+  const failedUploads = items.filter((item) => item.uploadStatus === 'failed' || (item.uploadStatus === 'local' && item.uploadError))
+
   const hasActiveWork = items.some((item) =>
     ['queued', 'waiting_for_telegram', 'uploading', 'local'].includes(item.uploadStatus),
   )
@@ -443,19 +452,45 @@ function App() {
 
     setItems((current) => [...current, ...validItems])
     notify(`${validItems.length} ${validItems.length === 1 ? 'item' : 'items'} added. Preparing a private backup…`)
-    validItems.forEach((item) => void syncItem(item))
+    // Two at a time. Launching every upload at once sent N full-size originals
+    // simultaneously, which swamps both the browser and the backend that has to
+    // hand each one to Telegram -- the same contention the serial job system
+    // exists to avoid.
+    void queueUploads(validItems)
+  }
+
+  async function queueUploads(queue: MediaItem[]) {
+    const pending = [...queue]
+    const workers = Array.from({ length: Math.min(MAX_PARALLEL_UPLOADS, pending.length) }, async () => {
+      while (pending.length > 0) {
+        const item = pending.shift()
+        if (item) await syncItem(item)
+      }
+    })
+    await Promise.all(workers)
+  }
+
+  function setItemProgress(id: string, progress: number) {
+    setItems((current) => current.map((currentItem) => currentItem.id === id
+      ? { ...currentItem, uploadProgress: progress }
+      : currentItem))
   }
 
   async function syncItem(item: MediaItem) {
-    setItems((current) => current.map((currentItem) => currentItem.id === item.id ? { ...currentItem, uploadStatus: 'queued' } : currentItem))
+    setItems((current) => current.map((currentItem) => currentItem.id === item.id
+      ? { ...currentItem, uploadStatus: 'queued', uploadProgress: 0 }
+      : currentItem))
     try {
-      const saved = await uploadMedia(item)
+      const saved = await uploadMedia(item, (fraction) => setItemProgress(item.id, fraction))
       if (item.url.startsWith('blob:')) URL.revokeObjectURL(item.url)
-      setItems((current) => current.map((currentItem) => currentItem.id === item.id ? itemFromApi(saved, mediaUrl) : currentItem))
+      setItems((current) => current.map((currentItem) => currentItem.id === item.id
+        ? { ...itemFromApi(saved, mediaUrl), uploadProgress: undefined }
+        : currentItem))
     } catch (error) {
       setItems((current) => current.map((currentItem) => currentItem.id === item.id ? {
         ...currentItem,
         uploadStatus: 'local',
+        uploadProgress: undefined,
         uploadError: error instanceof Error ? error.message : 'The backup service is unavailable.',
       } : currentItem))
       notify('The media is visible locally, but the backup service could not be reached. You can try again after starting the backend.')
@@ -1054,6 +1089,24 @@ function App() {
               <Check size={16} />
               <span>{notice}</span>
               <button className="notice-close" type="button" aria-label="Dismiss notice" onClick={() => notify('')}><X size={15} /></button>
+            </div>
+          )}
+
+          {(uploadingCount > 0 || waitingCount > 0 || failedUploads.length > 0) && (
+            <div className="upload-summary" role="status">
+              {uploadingCount > 0 && <span><Loader2 size={13} className="spinning" /> {uploadingCount} uploading</span>}
+              {waitingCount > 0 && <span><Send size={13} /> {waitingCount} waiting for Telegram</span>}
+              {failedUploads.length > 0 && (
+                <span className="upload-summary-failed">
+                  <AlertCircle size={13} /> {failedUploads.length} failed
+                  <button
+                    type="button"
+                    onClick={() => { failedUploads.forEach((item) => void handleRetry(item)) }}
+                  >
+                    Retry all
+                  </button>
+                </span>
+              )}
             </div>
           )}
 

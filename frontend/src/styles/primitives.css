@@ -1075,3 +1075,63 @@
 .search-recent-item:focus-visible {
   background: var(--surface-container);
 }
+
+/* --- Upload progress on a tile ------------------------------------------ */
+.tile-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.tile-progress span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  transition: width var(--motion-fast) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile-progress span {
+    transition: none;
+  }
+}
+
+/* --- Upload queue summary ----------------------------------------------- */
+.upload-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-md);
+  background: var(--surface-container);
+  font-size: var(--text-sm);
+  color: var(--on-surface-variant);
+}
+
+.upload-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.upload-summary-failed {
+  color: var(--danger);
+}
+
+.upload-summary-failed button {
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font-family: inherit;
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

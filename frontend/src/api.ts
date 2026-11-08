@@ -206,8 +206,15 @@ export async function listMedia(view = 'library', search = '', albumId?: string)
   return request<ApiMedia[]>(`/api/media?${params.toString()}`)
 }
 
-export async function uploadMedia(item: MediaItem): Promise<ApiMedia> {
-  if (!item.file) throw new Error('The selected file is no longer available. Please choose it again.')
+/**
+ * Uploads one item, reporting byte progress.
+ *
+ * Uses XMLHttpRequest rather than fetch for this single call because fetch has
+ * no upload progress event: a 200 MB video showed as a static tile and then
+ * jumped to done, making a slow upload indistinguishable from a stalled one.
+ */
+export function uploadMedia(item: MediaItem, onProgress?: (fraction: number) => void): Promise<ApiMedia> {
+  if (!item.file) return Promise.reject(new Error('The selected file is no longer available. Please choose it again.'))
   const form = new FormData()
   form.append('file', item.file)
   form.append('captured_at', item.capturedAt.toISOString())
@@ -221,7 +228,33 @@ export async function uploadMedia(item: MediaItem): Promise<ApiMedia> {
   if (item.cameraMake) form.append('camera_make', item.cameraMake)
   if (item.cameraModel) form.append('camera_model', item.cameraModel)
   if (item.lensModel) form.append('lens_model', item.lensModel)
-  return request<ApiMedia>('/api/media', { method: 'POST', body: form })
+
+  return new Promise<ApiMedia>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${API_BASE}/api/media`)
+    xhr.setRequestHeader('X-Client-ID', clientId)
+    if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`)
+    // No Content-Type: the browser must set the multipart boundary itself.
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) onProgress(event.loaded / event.total)
+    }
+    xhr.onload = () => {
+      let payload: unknown = {}
+      try { payload = JSON.parse(xhr.responseText) } catch { /* non-JSON error body */ }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(1)
+        resolve(payload as ApiMedia)
+        return
+      }
+      if (xhr.status === 401) onUnauthorized?.()
+      const detail = (payload as { detail?: string })?.detail
+      reject(new Error(detail || `Upload failed (${xhr.status})`))
+    }
+    xhr.onerror = () => reject(new Error('The upload was interrupted. Check that the local service is running.'))
+    xhr.onabort = () => reject(new Error('The upload was cancelled.'))
+    xhr.send(form)
+  })
 }
 
 export function retryMedia(id: string): Promise<ApiMedia> {

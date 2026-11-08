@@ -29,6 +29,8 @@ export type MediaItem = {
   lensModel?: string
   file?: File
   uploadStatus: UploadStatus
+  /** 0..1 while a backup is in flight; undefined when idle. */
+  uploadProgress?: number
   /** 'missing' means the local copy is gone; metadata is still intact. */
   fileState?: 'present' | 'missing' | 'recovering'
   uploadError?: string
