@@ -947,3 +947,43 @@
     gap: 10px;
   }
 }
+
+/* --- Person card actions (hide / remove) -------------------------------- */
+.person-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.person-actions .icon-button {
+  padding: 3px;
+  color: var(--on-surface-variant);
+}
+
+.person-actions .icon-button:hover {
+  color: var(--on-surface);
+}
+
+.person-actions .delete-person:hover {
+  color: var(--danger);
+}
+
+.person-actions .person-merge {
+  margin-right: 2px;
+}
+
+/* The card is a column, so the action row needs its own track beneath the
+   name rather than trying to fit beside it. */
+.person-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 11px 9px;
+}
+
+.person-actions-row .person-merge {
+  flex: 1 1 auto;
+  justify-content: center;
+}

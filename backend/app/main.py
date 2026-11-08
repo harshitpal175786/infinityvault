@@ -1042,6 +1042,7 @@ async def retry_media(
 
 class PersonRename(BaseModel):
     name: str | None = None
+    hidden: bool | None = None
 
 
 class PersonMerge(BaseModel):
@@ -1090,6 +1091,7 @@ def get_people(client_id: str | None = Header(default=None, alias="X-Client-ID")
             "face_count": row["face_count"],
             "cover_face_id": row["cover_face_id"],
             "cover_url": f"/api/faces/{row['cover_face_id']}/thumbnail" if row["cover_face_id"] else None,
+            "is_hidden": bool(row["is_hidden"]),
         }
         for row in db.list_people(client_id)
     ]
@@ -1104,11 +1106,29 @@ def person_media(person_id: str, client_id: str | None = Header(default=None, al
 @app.patch("/api/people/{person_id}")
 def rename_person(person_id: str, payload: PersonRename, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
     client_id = resolve_client_id(client_id)
-    name = (payload.name or "").strip()[:100] or None
-    row = db.set_person_name(person_id, client_id, name)
+    row = None
+    if payload.hidden is not None:
+        row = db.set_person_hidden(person_id, client_id, payload.hidden)
+    if payload.name is not None or payload.hidden is None:
+        name = (payload.name or "").strip()[:100] or None
+        row = db.set_person_name(person_id, client_id, name)
     if not row:
         raise HTTPException(status_code=404, detail="Person not found")
-    return {"id": row["id"], "name": row["name"], "face_count": row["face_count"]}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "face_count": row["face_count"],
+        "is_hidden": bool(row["is_hidden"]),
+    }
+
+
+@app.delete("/api/people/{person_id}")
+def delete_person(person_id: str, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
+    """Remove a person. Photos and faces are kept; only the cluster goes."""
+    client_id = resolve_client_id(client_id)
+    if not db.delete_person(person_id, client_id):
+        raise HTTPException(status_code=404, detail="Person not found")
+    return {"deleted": True}
 
 
 @app.post("/api/people/merge")

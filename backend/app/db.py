@@ -226,6 +226,13 @@ def init_db() -> None:
         }
         if "origin_group" not in album_columns:
             connection.execute("ALTER TABLE albums ADD COLUMN origin_group TEXT")
+        # Hiding a person is recoverable, unlike deleting one, so it needs its
+        # own flag rather than a row removal.
+        person_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(people)")
+        }
+        if "is_hidden" not in person_columns:
+            connection.execute("ALTER TABLE people ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0")
         connection.execute(
             "CREATE INDEX IF NOT EXISTS media_items_client_state ON media_items(client_id, is_archived, trashed_at, is_favorite)"
         )
@@ -1255,6 +1262,42 @@ def set_person_name(person_id: str, client_id: str, name: str | None) -> sqlite3
         if result.rowcount == 0:
             return None
         return connection.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
+
+
+def set_person_hidden(person_id: str, client_id: str, hidden: bool) -> sqlite3.Row | None:
+    """Hide or restore a person without destroying the cluster."""
+    with closing(open_db()) as connection:
+        result = connection.execute(
+            "UPDATE people SET is_hidden = ?, updated_at = ? WHERE id = ? AND client_id = ?",
+            (1 if hidden else 0, utc_now(), person_id, client_id),
+        )
+        connection.commit()
+        if result.rowcount == 0:
+            return None
+        return connection.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
+
+
+def delete_person(person_id: str, client_id: str) -> bool:
+    """Delete a person and unassign its faces.
+
+    The faces and the media rows both survive: a deleted person means "I do not
+    want this cluster tracked", never "delete these photos". Faces are detached
+    rather than removed so re-running clustering can group them again.
+    """
+    with closing(open_db()) as connection:
+        existing = connection.execute(
+            "SELECT id FROM people WHERE id = ? AND client_id = ?", (person_id, client_id)
+        ).fetchone()
+        if not existing:
+            return False
+        connection.execute(
+            "UPDATE faces SET person_id = NULL WHERE person_id = ? AND client_id = ?",
+            (person_id, client_id),
+        )
+        connection.execute("DELETE FROM people WHERE id = ? AND client_id = ?", (person_id, client_id))
+        connection.commit()
+    mark_library_changed(client_id)
+    return True
 
 
 def merge_people(source_id: str, target_id: str, client_id: str) -> int:

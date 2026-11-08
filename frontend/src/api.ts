@@ -353,6 +353,8 @@ export type Person = {
   face_count: number
   cover_face_id: string | null
   cover_url: string | null
+  /** Hidden people stay clustered but are out of the default view. */
+  is_hidden?: boolean
 }
 
 export type FaceStatus = {
@@ -388,6 +390,18 @@ export function renamePerson(personId: string, name: string): Promise<Person> {
     method: 'PATCH',
     body: JSON.stringify({ name: name.trim() }),
   })
+}
+
+export function hidePerson(id: string, hidden: boolean): Promise<{ id: string; is_hidden: boolean }> {
+  return request<{ id: string; is_hidden: boolean }>(`/api/people/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ hidden }),
+  })
+}
+
+/** Removes the person only. Their photos and faces stay in the library. */
+export function deletePerson(id: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/people/${id}`, { method: 'DELETE' })
 }
 
 export function mergePeople(sourceId: string, targetId: string): Promise<{ merged_faces: number }> {

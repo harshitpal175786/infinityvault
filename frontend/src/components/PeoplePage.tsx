@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Check, Loader2, Merge, Pencil, ScanFace, Sparkles, UserRound, X } from 'lucide-react'
+import { Check, Eye, EyeOff, Loader2, Merge, Pencil, ScanFace, Sparkles, Trash2, UserRound, X } from 'lucide-react'
 import {
   clusterFaces,
+  deletePerson,
   getFaceStatus,
+  hidePerson,
   listPeople,
   listPersonMedia,
   mediaUrl,
@@ -15,6 +17,9 @@ import type { ApiMedia, FaceStatus, Person } from '../api'
 type PeoplePageProps = {
   onNotice: (message: string) => void
   onOpenMedia: (item: ApiMedia) => void
+  /** Lets the parent keep its copy of the list in sync after a hide. */
+  onPersonChanged: (person: Person) => void
+  onPersonDeleted: (personId: string) => void
 }
 
 /** "unnamed" is how the clusterer marks a face it has not been told about. */
@@ -22,14 +27,47 @@ function displayName(person: Person): string {
   return person.name?.trim() || 'Unnamed'
 }
 
-export function PeoplePage({ onNotice, onOpenMedia }: PeoplePageProps) {
+export function PeoplePage({ onNotice, onOpenMedia, onPersonChanged, onPersonDeleted }: PeoplePageProps) {
+  // Hidden people stay clustered; they are only out of the default view.
+  const [showHidden, setShowHidden] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<Person | null>(null)
+
   const [people, setPeople] = useState<Person[]>([])
+
+  const hiddenCount = people.filter((person) => person.is_hidden).length
+  const visiblePeople = showHidden ? people : people.filter((person) => !person.is_hidden)
+
   const [status, setStatus] = useState<FaceStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<'scan' | 'cluster' | null>(null)
 
   const [selected, setSelected] = useState<Person | null>(null)
   const [personMedia, setPersonMedia] = useState<ApiMedia[]>([])
+
+  async function toggleHidden(person: Person) {
+    try {
+      const saved = await hidePerson(person.id, !person.is_hidden)
+      setPeople((current) => current.map((each) => each.id === person.id ? { ...each, is_hidden: saved.is_hidden } : each))
+      onNotice(saved.is_hidden ? `${displayName(person)} hidden.` : `${displayName(person)} shown again.`)
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'Could not update that person.')
+    }
+  }
+
+  async function commitDelete(person: Person) {
+    try {
+      await deletePerson(person.id)
+      setPeople((current) => current.filter((each) => each.id !== person.id))
+      onPersonDeleted(person.id)
+      if (selected?.id === person.id) setSelected(null)
+      // Phrased so it cannot be read as having deleted photos.
+      onNotice(`${displayName(person)} removed. Their photos are still in your library.`)
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'Could not remove that person.')
+    } finally {
+      setConfirmDelete(null)
+    }
+  }
   const [mediaLoading, setMediaLoading] = useState(false)
 
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -174,6 +212,17 @@ export function PeoplePage({ onNotice, onOpenMedia }: PeoplePageProps) {
           </p>
         </div>
         <div className="people-actions">
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              className={showHidden ? 'ghost-button is-active' : 'ghost-button'}
+              onClick={() => setShowHidden((value) => !value)}
+              aria-pressed={showHidden}
+            >
+              {showHidden ? <EyeOff size={14} /> : <Eye size={14} />}
+              {showHidden ? 'Hide hidden' : `Show ${hiddenCount} hidden`}
+            </button>
+          )}
           <button type="button" className="ghost-button" onClick={() => void runScan()} disabled={busy !== null}>
             <ScanFace size={14} />
             {busy === 'scan' ? 'Analysing…' : 'Analyse photos'}
@@ -219,7 +268,7 @@ export function PeoplePage({ onNotice, onOpenMedia }: PeoplePageProps) {
         </div>
       ) : (
         <div className="people-grid">
-          {people.map((person) => {
+          {visiblePeople.map((person) => {
             const isMergeTarget = Boolean(mergeSource) && mergeSource?.id !== person.id
             return (
               <article
@@ -285,16 +334,36 @@ export function PeoplePage({ onNotice, onOpenMedia }: PeoplePageProps) {
                   </span>
                 </div>
 
-                {!mergeSource && (
+                <div className="person-actions person-actions-row">
+                  {!mergeSource && (
+                    <button
+                      type="button"
+                      className="person-merge"
+                      onClick={(event) => { event.stopPropagation(); setMergeSource(person) }}
+                      title="Merge this person into another"
+                    >
+                      <Merge size={12} /> Merge
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="person-merge"
-                    onClick={(event) => { event.stopPropagation(); setMergeSource(person) }}
-                    title="Merge this person into another"
+                    className="icon-button"
+                    aria-label={person.is_hidden ? `Show ${displayName(person)}` : `Hide ${displayName(person)}`}
+                    title={person.is_hidden ? 'Show in the main list' : 'Hide without deleting'}
+                    onClick={(event) => { event.stopPropagation(); void toggleHidden(person) }}
                   >
-                    <Merge size={12} /> Merge
+                    {person.is_hidden ? <Eye size={12} /> : <EyeOff size={12} />}
                   </button>
-                )}
+                  <button
+                    type="button"
+                    className="icon-button delete-person"
+                    aria-label={`Remove ${displayName(person)}`}
+                    title="Remove this person"
+                    onClick={(event) => { event.stopPropagation(); setConfirmDelete(person) }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
               </article>
             )
           })}
@@ -329,6 +398,26 @@ export function PeoplePage({ onNotice, onOpenMedia }: PeoplePageProps) {
             </div>
           )}
         </section>
+      )}
+
+      {confirmDelete && (
+        <div className="modal-scrim" onMouseDown={(event) => { if (event.currentTarget === event.target) setConfirmDelete(null) }}>
+          <div className="modal-panel" role="dialog" aria-modal="true" aria-label="Remove person">
+            <div className="modal-head">
+              <h2 className="modal-title">Remove {displayName(confirmDelete)}?</h2>
+              <button type="button" className="icon-button" aria-label="Close" onClick={() => setConfirmDelete(null)}><X size={16} /></button>
+            </div>
+            <div className="modal-body">
+              {/* Never let this read as deleting photographs. */}
+              <p>The face group is removed. Every photo stays in your library, and the faces can be grouped again later. To keep the group but take it out of the way, hide it instead.</p>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn--ghost" onClick={() => setConfirmDelete(null)}>Cancel</button>
+              <button type="button" className="btn btn--secondary" onClick={() => { const p = confirmDelete; setConfirmDelete(null); if (p) void toggleHidden(p) }}>Hide instead</button>
+              <button type="button" className="btn btn--danger" onClick={() => void commitDelete(confirmDelete)}>Remove</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

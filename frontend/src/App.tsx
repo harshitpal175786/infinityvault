@@ -1006,7 +1006,12 @@ function App() {
             ) : libraryView === 'utilities' ? (
               <UtilitiesPage onNotice={setNotice} />
             ) : libraryView === 'people' ? (
-              <PeoplePage onNotice={setNotice} onOpenMedia={(item) => setViewingItem(itemFromApi(item, mediaUrl))} />
+              <PeoplePage
+                onNotice={notify}
+                onOpenMedia={(item) => setViewingItem(itemFromApi(item, mediaUrl))}
+                onPersonChanged={(person) => setPeople((current) => current.map((each) => each.id === person.id ? person : each))}
+                onPersonDeleted={(personId) => setPeople((current) => current.filter((each) => each.id !== personId))}
+              />
             ) : libraryView === 'explore' ? (
               <ExplorePage onNotice={setNotice} onOpenMedia={(item) => setViewingItem(itemFromApi(item, mediaUrl))} />
             ) : initialLoading ? (
