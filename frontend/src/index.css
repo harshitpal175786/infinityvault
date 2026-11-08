@@ -2680,3 +2680,62 @@
 .explore-head-actions .ghost-button {
   margin-top: 0;
 }
+
+/* Explore grouping chips: tags, people and coordinate areas are dense lists
+   of labels with counts, not thumbnails, so they wrap as chips rather than
+   forcing a grid of mostly-empty cards. */
+.explore-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.explore-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--primary-container);
+  color: var(--on-surface);
+  font-size: 13px;
+}
+
+.explore-chip-count {
+  color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+/* Utilities lists: a name and its size, aligned so the sizes form a column the
+   eye can scan. These are read-only, hence no button affordance. */
+.utility-list {
+  list-style: none;
+  margin: 8px 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.utility-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--primary-soft);
+  font-size: 13px;
+}
+
+.utility-list-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.utility-list-meta {
+  color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}

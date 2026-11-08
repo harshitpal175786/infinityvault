@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, CheckCircle2, CloudUpload, DatabaseBackup, HardDrive, RefreshCw, ShieldCheck } from 'lucide-react'
-import { applyRestore, backupMetadata, buildVideoProxies, checkIntegrity, getBackupStatus, getIntegrityStatus, getVideoStatus, listBrokenMedia, scanForRestore, type VideoStatus } from '../api'
+import { applyRestore, backupMetadata, buildVideoProxies, checkIntegrity, getBackupStatus, getIntegrityStatus, getLargeFiles, getLocationGaps, getVideoStatus, type LargeFiles, listBrokenMedia, type LocationGaps, scanForRestore, type VideoStatus } from '../api'
 import type { ApiMedia, BackupState, IntegritySummary, RestoreScan } from '../api'
 
 function formatChecked(value: string | null): string {
@@ -22,6 +22,13 @@ function formatChecked(value: string | null): string {
  * require re-downloading every file. The copy here says so plainly rather
  * than implying a stronger guarantee than we can make.
  */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
 export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => void }) {
   const [summary, setSummary] = useState<IntegritySummary | null>(null)
   const [broken, setBroken] = useState<ApiMedia[]>([])
@@ -30,19 +37,25 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
   const [busy, setBusy] = useState<'scan' | 'restore' | 'backup' | null>(null)
   const [backupState, setBackupState] = useState<BackupState | null>(null)
   const [videos, setVideos] = useState<VideoStatus | null>(null)
+  const [large, setLarge] = useState<LargeFiles | null>(null)
+  const [gaps, setGaps] = useState<LocationGaps | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [nextSummary, nextBroken, nextBackup, nextVideos] = await Promise.all([
+      const [nextSummary, nextBroken, nextBackup, nextVideos, nextLarge, nextGaps] = await Promise.all([
         getIntegrityStatus(),
         listBrokenMedia(),
         getBackupStatus().catch(() => null),
         getVideoStatus().catch(() => null),
+        getLargeFiles().catch(() => null),
+        getLocationGaps().catch(() => null),
       ])
       setSummary(nextSummary)
       setBroken(nextBroken)
       if (nextBackup) setBackupState(nextBackup)
       if (nextVideos) setVideos(nextVideos)
+      if (nextLarge) setLarge(nextLarge)
+      if (nextGaps) setGaps(nextGaps)
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'Could not read library health.')
     }
@@ -128,6 +141,45 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
         <div className="utility-card-head">
           <span className="utility-icon"><ShieldCheck size={18} /></span>
           <div>
+            <h3>Largest files</h3>
+            <p className="utility-copy">
+              The biggest originals in the library. Nothing is deleted from here —
+              this shows where the space goes so you can decide yourself.
+            </p>
+            {large && large.items.length === 0 ? (
+              <p className="utility-meta">
+                No file is larger than {formatBytes(large.min_bytes)}. Library total: {formatBytes(large.total_bytes)}.
+              </p>
+            ) : (
+              <>
+                {large && (
+                  <p className="utility-meta">
+                    Library total: {formatBytes(large.total_bytes)}
+                  </p>
+                )}
+                <ul className="utility-list">
+                  {large?.items.map((item) => (
+                    <li key={item.id}>
+                      <span className="utility-list-name">{item.name}</span>
+                      <span className="utility-list-meta">{formatBytes(item.size)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            <h3>Photos without a location</h3>
+            {gaps ? (
+              <p className="utility-meta">
+                {gaps.located} of {gaps.total} photos have a location
+                {gaps.missing > 0 ? ` · ${gaps.missing} without (${(100 - gaps.percent_located).toFixed(1)}%)` : ' · none missing'}.
+                Missing locations are never guessed — a photo only appears on the map where
+                it was actually taken.
+              </p>
+            ) : (
+              <p className="utility-meta">Could not read location coverage.</p>
+            )}
+
             <h3>Video previews</h3>
             <p className="utility-copy">
               A preview is a small copy of each video, built once so playback starts

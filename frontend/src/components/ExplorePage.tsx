@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Camera, Copy, Loader2, MapPin, RefreshCw, Sparkles } from 'lucide-react'
-import { backfillCameras, backfillGeo, listDuplicates, listGeoPoints, listMemories, listRecentlyAdded, mediaUrl } from '../api'
+import { Camera, Copy, Loader2, MapPin, MapPinned, RefreshCw, Sparkles, Tag, Users } from 'lucide-react'
+import { backfillCameras, backfillGeo, resolveDuplicates, listDuplicates, listGeoPoints, listMemories, listPersonGroups, listPlaceGroups, listRecentlyAdded, listTagGroups, mediaUrl } from '../api'
+import type { PersonGroup, PlaceGroup, TagGroup } from '../api'
 import type { ApiMedia, DuplicateGroup, GeoPoint } from '../api'
 
 type ExplorePageProps = {
@@ -120,20 +121,29 @@ export function ExplorePage({ onNotice, onOpenMedia }: ExplorePageProps) {
   const [memories, setMemories] = useState<ApiMedia[]>([])
   const [recent, setRecent] = useState<ApiMedia[]>([])
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([])
+  const [places, setPlaces] = useState<PlaceGroup[]>([])
+  const [tagGroups, setTagGroups] = useState<TagGroup[]>([])
+  const [personGroups, setPersonGroups] = useState<PersonGroup[]>([])
   const [loading, setLoading] = useState(true)
-  const [busy, setBusy] = useState<'geo' | 'camera' | null>(null)
+  const [busy, setBusy] = useState<'geo' | 'camera' | 'duplicates' | null>(null)
 
   const load = useCallback(async () => {
-    const [nextPoints, nextMemories, nextRecent, nextDuplicates] = await Promise.all([
+    const [nextPoints, nextMemories, nextRecent, nextDuplicates, nextPlaces, nextTags, nextPeople] = await Promise.all([
       listGeoPoints().catch(() => []),
       listMemories().then((r) => r.items).catch(() => []),
       listRecentlyAdded(24).catch(() => []),
       listDuplicates().catch(() => []),
+      listPlaceGroups().catch(() => []),
+      listTagGroups().catch(() => []),
+      listPersonGroups().catch(() => []),
     ])
     setPoints(nextPoints)
     setMemories(nextMemories)
     setRecent(nextRecent)
     setDuplicates(nextDuplicates)
+    setPlaces(nextPlaces)
+    setTagGroups(nextTags)
+    setPersonGroups(nextPeople)
     setLoading(false)
   }, [])
 
@@ -155,6 +165,23 @@ export function ExplorePage({ onNotice, onOpenMedia }: ExplorePageProps) {
       await load()
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'Locations could not be recovered.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function resolveGroup(checksum: string) {
+    setBusy('duplicates')
+    try {
+      const result = await resolveDuplicates(checksum)
+      onNotice(
+        result.trashed > 0
+          ? `Moved ${result.trashed} duplicate${result.trashed === 1 ? '' : 's'} to Trash. You can restore them from there.`
+          : 'Nothing to remove in that group.',
+      )
+      await load()
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'Duplicates could not be resolved.')
     } finally {
       setBusy(null)
     }
@@ -258,6 +285,69 @@ export function ExplorePage({ onNotice, onOpenMedia }: ExplorePageProps) {
 
       <section className="explore-section">
         <header className="explore-head">
+          <h2 className="explore-title"><Tag size={17} /> Tags</h2>
+          <p className="explore-sub">Jump into anything you have tagged.</p>
+        </header>
+        {tagGroups.length === 0 ? (
+          <p className="explore-empty">No tags yet. Tag a photo and it appears here.</p>
+        ) : (
+          <div className="explore-chips">
+            {tagGroups.map((group) => (
+              <span key={group.id} className="explore-chip">
+                {group.name}
+                <span className="explore-chip-count">{group.count}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="explore-section">
+        <header className="explore-head">
+          <h2 className="explore-title"><Users size={17} /> People</h2>
+          <p className="explore-sub">Faces grouped by person, most photographed first.</p>
+        </header>
+        {personGroups.length === 0 ? (
+          <p className="explore-empty">No people clustered yet. Run face detection on the People page.</p>
+        ) : (
+          <div className="explore-chips">
+            {personGroups.map((group) => (
+              <span key={group.id} className="explore-chip">
+                {group.name}
+                <span className="explore-chip-count">{group.count}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="explore-section">
+        <header className="explore-head">
+          <h2 className="explore-title"><MapPinned size={17} /> Areas</h2>
+          {/* Deliberately not called "Cities": these are coordinate buckets.
+              Naming them would mean reverse geocoding, which sends photo
+              locations to a third party. */}
+          <p className="explore-sub">
+            Where your photos cluster. Labelled by coordinates, not city names —
+            resolving a name would mean sending every photo location to someone else.
+          </p>
+        </header>
+        {places.length === 0 ? (
+          <p className="explore-empty">No photo has a location yet.</p>
+        ) : (
+          <div className="explore-chips">
+            {places.map((place) => (
+              <span key={`${place.latitude}:${place.longitude}`} className="explore-chip">
+                {place.latitude.toFixed(2)}, {place.longitude.toFixed(2)}
+                <span className="explore-chip-count">{place.count}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="explore-section">
+        <header className="explore-head">
           <h2 className="explore-title"><Copy size={17} /> Duplicates</h2>
           <p className="explore-sub">
             {duplicates.length === 0
@@ -277,6 +367,16 @@ export function ExplorePage({ onNotice, onOpenMedia }: ExplorePageProps) {
                 <div className="duplicate-meta">
                   <span>{group.copies} copies</span>
                   <span className="duplicate-wasted">{formatBytes(group.wasted_bytes)} reclaimable</span>
+                  {/* Moves to Trash, not deleted: reversible, and the oldest
+                      copy is always the one kept. */}
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    disabled={busy !== null}
+                    onClick={() => void resolveGroup(group.checksum)}
+                  >
+                    Keep oldest, trash the rest
+                  </button>
                 </div>
               </div>
             ))}

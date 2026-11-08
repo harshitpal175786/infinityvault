@@ -430,6 +430,10 @@ export type MediaFilterParams = {
   hasFaces?: boolean
   hasLocation?: boolean
   camera?: string
+  personId?: string
+  tagId?: string
+  place?: string
+  favorite?: boolean
   sort?: 'newest' | 'oldest'
 }
 
@@ -441,6 +445,10 @@ export function filterQuery(filters: MediaFilterParams): string {
   if (filters.hasFaces !== undefined) params.set('has_faces', String(filters.hasFaces))
   if (filters.hasLocation !== undefined) params.set('has_location', String(filters.hasLocation))
   if (filters.camera) params.set('camera', filters.camera)
+  if (filters.personId) params.set('person_id', filters.personId)
+  if (filters.tagId) params.set('tag_id', filters.tagId)
+  if (filters.place) params.set('place', filters.place)
+  if (filters.favorite !== undefined) params.set('favorite', String(filters.favorite))
   if (filters.sort) params.set('sort', filters.sort)
   return params.toString()
 }
@@ -471,4 +479,35 @@ export function getVideoStatus(): Promise<VideoStatus> {
 
 export function buildVideoProxies(): Promise<VideoStatus & { queued: number }> {
   return request('/api/videos/proxies', { method: 'POST' })
+}
+
+export type PlaceGroup = { latitude: number; longitude: number; count: number }
+export type TagGroup = { id: string; name: string; count: number }
+export type PersonGroup = { id: string; name: string; count: number }
+
+export function listPlaceGroups(): Promise<PlaceGroup[]> {
+  return request<PlaceGroup[]>('/api/explore/places')
+}
+
+export function listTagGroups(): Promise<TagGroup[]> {
+  return request<TagGroup[]>('/api/explore/tags')
+}
+
+export function listPersonGroups(): Promise<PersonGroup[]> {
+  return request<PersonGroup[]>('/api/explore/people')
+}
+
+export type LargeFiles = { total_bytes: number; min_bytes: number; items: ApiMedia[] }
+export type LocationGaps = { total: number; located: number; missing: number; percent_located: number }
+
+export function getLargeFiles(): Promise<LargeFiles> {
+  return request<LargeFiles>('/api/utilities/large-files')
+}
+
+export function getLocationGaps(): Promise<LocationGaps> {
+  return request<LocationGaps>('/api/utilities/location-gaps')
+}
+
+export function resolveDuplicates(checksum: string): Promise<{ trashed: number; remaining: number }> {
+  return request('/api/duplicates/resolve?checksum=' + encodeURIComponent(checksum), { method: 'POST' })
 }

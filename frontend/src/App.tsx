@@ -46,7 +46,7 @@ import { ExplorePage } from './components/ExplorePage'
 import { EmptyState, MediaCard, MediaDetailsModal, MediaViewer, TelegramModal } from './components/MediaViews'
 import { useLibraryFilters, FILTERS, type Filter, type LibraryView } from './hooks/useLibraryFilters'
 import { dateKey, formatDateHeading, formatDuration, formatSize, formatTime, itemFromApi, statusLabel } from './lib/format'
-import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listCameras, listMedia, listMediaPage, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
+import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listCameras, listMedia, listMediaPage, listPeople, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
 import type { Album, ApiMedia, CameraOption, MediaFilterParams, Tag, TelegramAuthResponse, TelegramStatus } from './api'
 import type { MediaItem, MediaType, UploadStatus } from './types'
 
@@ -92,6 +92,7 @@ function App() {
   } = useLibraryFilters()
   const [isDragging, setIsDragging] = useState(false)
   const [isTelegramOpen, setIsTelegramOpen] = useState(false)
+  const [people, setPeople] = useState<{ id: string; name: string | null; face_count: number }[]>([])
   const [viewingItem, setViewingItem] = useState<MediaItem | null>(null)
   const [editingItem, setEditingItem] = useState<MediaItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -142,12 +143,13 @@ function App() {
     const seq = ++requestSeq.current
     try {
       const mediaView = libraryView === 'album' ? 'library' : libraryView
-      const [page, savedTelegramStatus, savedAlbums, savedTags, savedCameras] = await Promise.all([
+      const [page, savedTelegramStatus, savedAlbums, savedTags, savedCameras, savedPeople] = await Promise.all([
         listMediaPage(mediaView, searchTerm, activeAlbumId, null, 200, advancedFilters),
         getTelegramStatus(),
         listAlbums(),
         listTags(),
         listCameras().catch(() => []),
+        listPeople().catch(() => []),
       ])
       if (seq !== requestSeq.current) return
 
@@ -192,6 +194,7 @@ function App() {
       setAlbums(savedAlbums)
       setTags(savedTags)
       setCameras(savedCameras)
+      setPeople(savedPeople)
     } catch (error) {
       if (showError && seq === requestSeq.current) {
         setNotice(error instanceof Error ? error.message : 'The local service is not available yet.')
@@ -726,6 +729,57 @@ function App() {
                 <option value="">Any</option>
                 <option value="true">Has faces</option>
                 <option value="false">No faces</option>
+              </select>
+            </label>
+            <label className="filter-field">
+              <span>Person</span>
+              <select
+                value={advancedFilters.personId ?? ''}
+                onChange={(event) => setAdvancedFilters((f) => ({ ...f, personId: event.target.value || undefined }))}
+                disabled={people.length === 0}
+              >
+                <option value="">{people.length === 0 ? 'No people yet' : 'Anyone'}</option>
+                {people.map((person) => (
+                  <option key={person.id} value={person.id}>
+                    {person.name || 'Unnamed'} ({person.face_count})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="filter-field">
+              <span>Tag</span>
+              <select
+                value={advancedFilters.tagId ?? ''}
+                onChange={(event) => setAdvancedFilters((f) => ({ ...f, tagId: event.target.value || undefined }))}
+                disabled={tags.length === 0}
+              >
+                <option value="">{tags.length === 0 ? 'No tags yet' : 'Any tag'}</option>
+                {tags.map((tag) => (
+                  <option key={tag.id} value={tag.id}>{tag.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="filter-field">
+              <span>Place</span>
+              <input
+                type="text"
+                placeholder="Folder or caption"
+                value={advancedFilters.place ?? ''}
+                onChange={(event) => setAdvancedFilters((f) => ({ ...f, place: event.target.value || undefined }))}
+              />
+            </label>
+            <label className="filter-field">
+              <span>Favourites</span>
+              <select
+                value={advancedFilters.favorite === undefined ? '' : String(advancedFilters.favorite)}
+                onChange={(event) => setAdvancedFilters((f) => ({
+                  ...f,
+                  favorite: event.target.value === '' ? undefined : event.target.value === 'true',
+                }))}
+              >
+                <option value="">Any</option>
+                <option value="true">Favourites only</option>
+                <option value="false">Not favourited</option>
               </select>
             </label>
             <label className="filter-field">

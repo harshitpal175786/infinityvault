@@ -460,6 +460,10 @@ def build_media_filters(
     has_faces: bool | None = None,
     has_location: bool | None = None,
     camera: str | None = None,
+    person_id: str | None = None,
+    tag_id: str | None = None,
+    place: str | None = None,
+    favorite: bool | None = None,
 ) -> tuple[list[str], list[Any]]:
     """SQL fragments for the library filters.
 
@@ -497,6 +501,39 @@ def build_media_filters(
         # "Apple iPhone 15 Pro" selects just that body.
         clauses.append("AND (camera_make = ? OR camera_model = ?)")
         parameters.extend([camera, camera])
+
+    if person_id:
+        # EXISTS rather than a join: a photo with several matching faces must
+        # still appear once, and a join would duplicate the row.
+        clauses.append(
+            "AND EXISTS (SELECT 1 FROM faces WHERE faces.media_id = media_items.id "
+            "AND faces.person_id = ?)"
+        )
+        parameters.append(person_id)
+
+    if tag_id:
+        clauses.append(
+            "AND EXISTS (SELECT 1 FROM media_tags WHERE media_tags.media_id = media_items.id "
+            "AND media_tags.tag_id = ?)"
+        )
+        parameters.append(tag_id)
+
+    if place:
+        # "Place" is composed from the folder path and description because this
+        # library has no geocoded place names: coordinates are stored, but
+        # reverse geocoding was deliberately rejected (it would send photo
+        # locations to a third party). Matching the text the user actually
+        # typed is honest; guessing a city from lat/lon would not be.
+        clauses.append(
+            "AND (COALESCE(folder_path, '') LIKE ? OR COALESCE(description, '') LIKE ?)"
+        )
+        like = f"%{place}%"
+        parameters.extend([like, like])
+
+    if favorite is True:
+        clauses.append("AND is_favorite = 1")
+    elif favorite is False:
+        clauses.append("AND is_favorite = 0")
 
     return clauses, parameters
 
@@ -541,6 +578,10 @@ def list_media_page(
     has_location: bool | None = None,
     sort: str = "newest",
     camera: str | None = None,
+    person_id: str | None = None,
+    tag_id: str | None = None,
+    place: str | None = None,
+    favorite: bool | None = None,
 ) -> tuple[list[sqlite3.Row], str | None]:
     """One page of media, newest first, using a keyset cursor.
 
@@ -581,6 +622,10 @@ def list_media_page(
         has_faces=has_faces,
         has_location=has_location,
         camera=camera,
+        person_id=person_id,
+        tag_id=tag_id,
+        place=place,
+        favorite=favorite,
     )
     extra_filter = "".join(filter_fragments)
     parameters.extend(filter_parameters)
@@ -1521,6 +1566,54 @@ def integrity_summary(client_id: str) -> dict[str, Any]:
     return summary
 
 
+def largest_media(client_id: str, limit: int = 20, min_bytes: int = 5 * 1024 * 1024) -> dict[str, Any]:
+    """Biggest files, for the storage section of Utilities.
+
+    Sorted by size rather than capture time because the question this answers is
+    "what is using my disk", not "what did I shoot last".
+    """
+    with closing(open_db()) as connection:
+        rows = list(connection.execute(
+            "SELECT * FROM media_items WHERE client_id = ? AND COALESCE(trashed_at, '') = '' "
+            "AND size_bytes >= ? ORDER BY size_bytes DESC LIMIT ?",
+            (client_id, min_bytes, limit),
+        ).fetchall())
+        total = connection.execute(
+            "SELECT COALESCE(SUM(size_bytes), 0) AS t FROM media_items "
+            "WHERE client_id = ? AND COALESCE(trashed_at, '') = ''",
+            (client_id,),
+        ).fetchone()["t"]
+    return {"items": rows, "total_bytes": total, "min_bytes": min_bytes}
+
+
+def location_gaps(client_id: str) -> dict[str, Any]:
+    """How many photos are missing GPS, so the gap is visible rather than silent.
+
+    Reported, never auto-filled: inventing coordinates would put photos on the
+    map in places they were not taken.
+    """
+    with closing(open_db()) as connection:
+        row = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN latitude IS NULL OR longitude IS NULL THEN 1 ELSE 0 END) AS missing,
+                SUM(CASE WHEN latitude IS NOT NULL AND longitude IS NOT NULL THEN 1 ELSE 0 END) AS located
+            FROM media_items
+            WHERE client_id = ? AND COALESCE(trashed_at, '') = '' AND media_type = 'photo'
+            """,
+            (client_id,),
+        ).fetchone()
+    total = row["total"] or 0
+    located = row["located"] or 0
+    return {
+        "total": total,
+        "located": located,
+        "missing": row["missing"] or 0,
+        "percent_located": round(100 * located / total, 1) if total else 0.0,
+    }
+
+
 def list_broken_media(client_id: str) -> list[sqlite3.Row]:
     with closing(open_db()) as connection:
         return list(connection.execute(
@@ -1869,6 +1962,115 @@ def geotagged_points(client_id: str) -> list[sqlite3.Row]:
             """,
             (client_id,),
         ).fetchall())
+
+
+def place_groups(client_id: str, precision: float = 0.25) -> list[dict[str, Any]]:
+    """Photos grouped into approximate areas, for Explore's Places section.
+
+    There is no reverse geocoding here on purpose: resolving a city would mean
+    sending every photo's coordinates to a third party, which this project
+    rejected. So a "place" is a coordinate bucket -- rounded to `precision`
+    degrees (0.25 is roughly 25 km) -- and it is labelled by its extremes and
+    photo count rather than by an invented name.
+
+    The UI must not imply these are real cities. It shows "Area near 28.6, 77.2"
+    because that is what is actually known.
+    """
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                ROUND(latitude / ?) * ? AS lat_bucket,
+                ROUND(longitude / ?) * ? AS lon_bucket,
+                COUNT(*) AS total
+            FROM media_items
+            WHERE client_id = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+              AND COALESCE(trashed_at, '') = ''
+            GROUP BY lat_bucket, lon_bucket
+            HAVING total > 0
+            ORDER BY total DESC
+            LIMIT 24
+            """,
+            (precision, precision, precision, precision, client_id),
+        ).fetchall()
+
+    return [
+        {
+            "latitude": round(row["lat_bucket"], 3),
+            "longitude": round(row["lon_bucket"], 3),
+            "count": row["total"],
+        }
+        for row in rows
+    ]
+
+
+def tag_groups(client_id: str) -> list[dict[str, Any]]:
+    """Tags with photo counts, for Explore."""
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            """
+            SELECT tags.id, tags.name, COUNT(media_tags.media_id) AS total
+            FROM tags
+            JOIN media_tags ON media_tags.tag_id = tags.id
+            JOIN media_items ON media_items.id = media_tags.media_id
+            WHERE tags.client_id = ? AND COALESCE(media_items.trashed_at, '') = ''
+            GROUP BY tags.id
+            ORDER BY total DESC, tags.name
+            """,
+            (client_id,),
+        ).fetchall()
+    return [{"id": r["id"], "name": r["name"], "count": r["total"]} for r in rows]
+
+
+def person_groups(client_id: str) -> list[dict[str, Any]]:
+    """People with face counts, for Explore."""
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            """
+            SELECT id, name, face_count FROM people
+            WHERE client_id = ? AND face_count > 0
+            ORDER BY face_count DESC, name
+            LIMIT 24
+            """,
+            (client_id,),
+        ).fetchall()
+    return [
+        {"id": r["id"], "name": r["name"] or "Unnamed", "count": r["face_count"]}
+        for r in rows
+    ]
+
+
+def trash_duplicate_extras(client_id: str, checksum: str) -> int:
+    """Move every extra copy of a checksum to the trash, keeping the oldest.
+
+    Trash, not delete: `DELETE FROM media_items` cannot be undone from the UI,
+    and a "duplicates" feature that silently destroys the wrong file is worse
+    than no feature at all. Trashed rows can be restored from the Trash view,
+    and Telegram still holds every original regardless.
+
+    The oldest copy is kept so the timeline does not lose its original
+    capture order, and its Telegram message id stays the canonical one.
+    """
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            """
+            SELECT id FROM media_items
+            WHERE client_id = ? AND checksum = ? AND COALESCE(trashed_at, '') = ''
+            ORDER BY capture_time, created_at
+            """,
+            (client_id, checksum),
+        ).fetchall()
+        if len(rows) <= 1:
+            return 0
+        extras = [row["id"] for row in rows[1:]]
+        now = utc_now()
+        connection.executemany(
+            "UPDATE media_items SET trashed_at = ?, updated_at = ? WHERE id = ?",
+            [(now, now, media_id) for media_id in extras],
+        )
+        connection.commit()
+    mark_library_changed(client_id)
+    return len(extras)
 
 
 def duplicate_groups(client_id: str) -> list[dict[str, Any]]:

@@ -368,6 +368,10 @@ def get_media(
     has_faces: bool | None = Query(default=None),
     has_location: bool | None = Query(default=None),
     camera: str | None = Query(default=None),
+    person_id: str | None = Query(default=None),
+    tag_id: str | None = Query(default=None),
+    place: str | None = Query(default=None),
+    favorite: bool | None = Query(default=None),
     sort: str = Query(default="newest"),
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
@@ -392,6 +396,10 @@ def get_media(
             has_faces=has_faces,
             has_location=has_location,
             camera=camera,
+            person_id=person_id,
+            tag_id=tag_id,
+            place=place,
+            favorite=favorite,
             sort=sort,
         )
         return [db.row_to_media(row) for row in rows]
@@ -410,6 +418,10 @@ def get_media(
             has_faces=has_faces,
             has_location=has_location,
             camera=camera,
+            person_id=person_id,
+            tag_id=tag_id,
+            place=place,
+            favorite=favorite,
             sort=sort,
         )
     except ValueError as error:
@@ -762,6 +774,17 @@ def media_proxy(
     if not row or row["media_type"] != "video":
         raise HTTPException(status_code=404, detail="Not a video")
     if not db.proxy_ready(media_id):
+        # A proxy can be gone because it was deleted by hand or the cache was
+        # cleared, while the row still claims 'ready'. Re-queue it rather than
+        # 404 forever, so the next play heals the library instead of needing the
+        # Utilities button. The caller still gets a 404 for this request: there
+        # is nothing to stream yet.
+        row_state = row["proxy_state"]
+        if row_state == "ready" and row["file_state"] == "present":
+            try:
+                db.enqueue_proxy_job(media_id)
+            except Exception:
+                pass
         raise HTTPException(status_code=404, detail="No proxy is ready for this video yet")
     return FileResponse(
         db.proxy_paths(media_id),
@@ -1055,6 +1078,69 @@ def cameras(
 ) -> list[dict]:
     """Cameras present in the library, most-used first."""
     return db.camera_options(resolve_client_id(client_id, query_client_id))
+
+
+@app.get("/api/utilities/large-files")
+def utilities_large_files(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict:
+    """Biggest originals, and the library total for context."""
+    effective = resolve_client_id(client_id, None)
+    result = db.largest_media(effective, limit)
+    return {
+        "total_bytes": result["total_bytes"],
+        "min_bytes": result["min_bytes"],
+        "items": [db.row_to_media(row) for row in result["items"]],
+    }
+
+
+@app.get("/api/utilities/location-gaps")
+def utilities_location_gaps(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+) -> dict:
+    return db.location_gaps(resolve_client_id(client_id, query_client_id))
+
+
+@app.post("/api/duplicates/resolve")
+def duplicates_resolve(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    checksum: str = Query(...),
+) -> dict:
+    """Resolve one duplicate group by trashing the extra copies.
+
+    Trash rather than delete so this is reversible: the rows move to the Trash
+    view. The oldest copy is kept.
+    """
+    effective = resolve_client_id(client_id, None)
+    trashed = db.trash_duplicate_extras(effective, checksum)
+    return {"trashed": trashed, "remaining": len(db.duplicate_groups(effective))}
+
+
+@app.get("/api/explore/places")
+def explore_places(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+) -> list[dict]:
+    """Approximate photo areas. Not cities: see db.place_groups."""
+    return db.place_groups(resolve_client_id(client_id, query_client_id))
+
+
+@app.get("/api/explore/tags")
+def explore_tags(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+) -> list[dict]:
+    return db.tag_groups(resolve_client_id(client_id, query_client_id))
+
+
+@app.get("/api/explore/people")
+def explore_people(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+) -> list[dict]:
+    return db.person_groups(resolve_client_id(client_id, query_client_id))
 
 
 @app.get("/api/duplicates")
