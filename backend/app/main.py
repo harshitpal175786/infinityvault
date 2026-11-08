@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from . import auth, db
 from .face_service import FaceService, FaceUnavailable
 from .thumbnail_service import ThumbnailService
+from . import proxy_service
 
 logger = logging.getLogger(__name__)
 # uvicorn configures its own loggers but leaves ours without a handler, so
@@ -61,8 +62,15 @@ async def lifespan(app: FastAPI):
     app.state.face_service = faces
     await faces.start()
 
+    # Proxies run last and in their own serial worker: encoding is expensive,
+    # so it must never delay thumbnails or face detection for new uploads.
+    proxies = proxy_service.ProxyService()
+    app.state.proxy_service = proxies
+    await proxies.ensure_worker()
+
     yield
 
+    await proxies.stop()
     await faces.stop()
     await thumbs.stop()
     await service.stop()
@@ -495,6 +503,13 @@ async def upload_media(
             db.enqueue_face_job(media_id, client_id)
         except Exception:
             pass
+    else:
+        # A proxy is what makes playback start in a second rather than after a
+        # full Telegram download, so queue it the moment a video arrives.
+        try:
+            db.enqueue_proxy_job(media_id)
+        except Exception:
+            pass
     row = db.get_media(media_id, client_id)
     return db.row_to_media(row)
 
@@ -728,6 +743,57 @@ def media_content(
     return FileResponse(path, media_type=row["mime_type"], filename=row["original_name"], content_disposition_type="inline")
 
 
+@app.get("/api/media/{media_id}/proxy")
+def media_proxy(
+    media_id: str,
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+) -> FileResponse:
+    """Serve the small seek-friendly video proxy.
+
+    Loaded straight into a <video>, so ?client_id= is required: the browser
+    cannot attach a header to a media request.
+
+    FileResponse answers range requests itself, so scrubbing works and the
+    browser only buffers what it plays.
+    """
+    effective_client_id = resolve_client_id(client_id, query_client_id)
+    row = db.get_media(media_id, effective_client_id)
+    if not row or row["media_type"] != "video":
+        raise HTTPException(status_code=404, detail="Not a video")
+    if not db.proxy_ready(media_id):
+        raise HTTPException(status_code=404, detail="No proxy is ready for this video yet")
+    return FileResponse(
+        db.proxy_paths(media_id),
+        media_type="video/mp4",
+        content_disposition_type="inline",
+        # A proxy is regenerated only when the row is re-imported, so it can be
+        # cached aggressively while still allowing revalidation.
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@app.post("/api/videos/proxies")
+def videos_enqueue_proxies(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+) -> dict:
+    """Queue a proxy for every video that does not have one yet."""
+    effective_client_id = resolve_client_id(client_id, None)
+    if not proxy_service.install_status()["available"]:
+        raise HTTPException(status_code=503, detail="ffmpeg is not installed, so proxies cannot be built")
+    queued = db.enqueue_all_proxies(effective_client_id)
+    return {"queued": queued, **db.proxy_status(effective_client_id)}
+
+
+@app.get("/api/videos/status")
+def videos_status(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+) -> dict:
+    effective_client_id = resolve_client_id(client_id, query_client_id)
+    return {**proxy_service.install_status(), **db.proxy_status(effective_client_id)}
+
+
 @app.get("/api/media/{media_id}/telegram-content")
 async def telegram_media_content(
     media_id: str,
@@ -796,6 +862,13 @@ async def retry_media(
         # Faces are optional and never block the upload response.
         try:
             db.enqueue_face_job(media_id, client_id)
+        except Exception:
+            pass
+    else:
+        # A proxy is what makes playback start in a second rather than after a
+        # full Telegram download, so queue it the moment a video arrives.
+        try:
+            db.enqueue_proxy_job(media_id)
         except Exception:
             pass
     row = db.get_media(media_id, client_id)

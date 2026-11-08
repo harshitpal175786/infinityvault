@@ -436,3 +436,57 @@ _Log:_ (empty)
 | 2026-02-14 | Pillow for thumbnails, not sharp | Python-native, cross-platform, no node native build |
 | 2026-02-14 | Skip HLS; use plain MP4 range requests | Simpler, adequate for personal video |
 | 2026-02-14 | Thumbnails as jobs, not inline | Keeps upload response fast; backfillable |
+
+
+## Phase 6 — Video playback (`proxy_service.py`)
+
+**Problem.** The viewer pointed `<video>` at `/telegram-content`, which
+downloads the *entire* original through the Telethon cache before a single
+frame appears. A five-minute phone clip is hundreds of megabytes: the viewer
+sat on a spinner for minutes and the timeline could not be scrubbed until the
+download finished.
+
+### What was built
+
+- [x] 6.1 **Proxy generation** — `backend/app/proxy_service.py`. One 720p H.264
+      MP4 per video, built in a serial background worker.
+- [x] 6.2 **Serving** — `GET /api/media/{id}/proxy`, accepting `?client_id=`
+      because `<video>` cannot send headers. `FileResponse` handles ranges.
+- [x] 6.3 **Viewer** — plays the proxy by default, with a **Playing preview** /
+      **Playing original** toggle, and automatic fallback to the original if the
+      proxy fails for any reason.
+- [x] 6.4 **Backfill** — `POST /api/videos/proxies`, `GET /api/videos/status`,
+      and a section on the Utilities page.
+
+### Decisions and why
+
+- **`-movflags +faststart` is the whole point.** Without it the MP4 index sits
+  at the end of the file, so the browser must download everything before it can
+  seek — exactly the behaviour being fixed. Verified: `moov` at byte 36,
+  before `mdat`.
+- **720p long edge, capped portably.** The scale expression uses `min()` on
+  each axis so portrait video is capped on *its* long edge. Verified:
+  1920x1080 -> 720x406, 720x1280 -> 406x720. Dimensions stay even because
+  H.264 in `yuv420p` cannot encode odd sizes.
+- **`-pix_fmt yuv420p` and `-profile:v main`.** Phone video is often
+  `yuv420p10le` or High profile, which QuickTime and older Safari refuse.
+- **Separate worker from thumbnails.** Encoding saturates a core; a queue of
+  large videos must never delay the thumbnail of a photo the user just
+  uploaded. One thread only, for the same 8 GB-RAM reason the face model is
+  serial.
+- **Never replaces the original.** Telegram keeps the archival copy; the proxy
+  is a viewing convenience and "Download original" is untouched.
+- **Failure is terminal, not retried forever.** A missing local file or a
+  corrupt container marks `failed` and the worker moves on. Verified that a
+  missing file and a non-video file both fail cleanly without wedging the queue.
+
+### Verified
+
+- 1080p source -> 720x406 proxy, H.264 + AAC, `faststart` confirmed by byte
+  offset, 1.8x smaller (a synthetic test pattern compresses poorly; real footage
+  compresses far better, so this figure is a floor, not a typical result).
+- Range request returns `206 Partial Content` with a correct `Content-Range`.
+- In-browser: `<video>` loads from `/proxy`, `readyState: 4`, one seekable
+  range, frames visible, toggle reads "Playing preview".
+- `/api/videos/status` works via header and via `?client_id=`.
+- Both failure paths mark `failed` without wedging the worker.

@@ -13,6 +13,7 @@ DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 CACHE_DIR = DATA_DIR / "telegram-cache"
 THUMB_DIR = DATA_DIR / "thumbnails"
+PROXY_DIR = DATA_DIR / "video-proxies"
 THUMB_LONGEST_EDGE = 400
 MICRO_LONGEST_EDGE = 32
 DB_PATH = Path(os.getenv("INFINITYVAULT_DB_PATH", DATA_DIR / "infinityvault.db"))
@@ -34,6 +35,7 @@ def init_db() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    PROXY_DIR.mkdir(parents=True, exist_ok=True)
     with closing(open_db()) as connection:
         connection.executescript(
             """
@@ -208,6 +210,7 @@ def init_db() -> None:
             "lens_model": "ALTER TABLE media_items ADD COLUMN lens_model TEXT",
             "file_state": "ALTER TABLE media_items ADD COLUMN file_state TEXT NOT NULL DEFAULT 'present'",
             "thumb_state": "ALTER TABLE media_items ADD COLUMN thumb_state TEXT NOT NULL DEFAULT 'pending'",
+            "proxy_state": "ALTER TABLE media_items ADD COLUMN proxy_state TEXT NOT NULL DEFAULT 'pending'",
             "integrity_state": "ALTER TABLE media_items ADD COLUMN integrity_state TEXT",
             "integrity_checked_at": "ALTER TABLE media_items ADD COLUMN integrity_checked_at TEXT",
         }
@@ -932,6 +935,10 @@ def row_to_media(row: sqlite3.Row, api_prefix: str = "/api") -> dict[str, Any]:
         # pending | running | ready | failed — "ready" means preview_url is a
         # real cached thumbnail rather than the full original.
         "thumb_state": row["thumb_state"],
+        # pending | ready | failed — "ready" means proxy_url is a small,
+        # seek-friendly re-encode instead of the full Telegram download.
+        "proxy_state": row["proxy_state"],
+        "proxy_url": f"{api_prefix}/media/{row['id']}/proxy" if row["proxy_state"] == "ready" else None,
         # None until an integrity check has run for this asset.
         "integrity_state": row["integrity_state"],
         "integrity_checked_at": row["integrity_checked_at"],
@@ -1950,3 +1957,114 @@ def recently_added(client_id: str, limit: int = 60) -> list[sqlite3.Row]:
             """,
             (client_id, max(1, min(limit, 500))),
         ).fetchall())
+
+
+# -- video proxies ---------------------------------------------------------
+# A proxy is a small, seek-friendly copy of a video. Playing the original meant
+# downloading the whole file from Telegram first, so a large clip showed a
+# spinner for minutes and scrubbing was impossible until it finished. The proxy
+# is a few MB, plays while it downloads, and the original stays untouched.
+
+def proxy_paths(media_id: str) -> Path:
+    """Where a proxy lives, plus the temp file used while writing it."""
+    return PROXY_DIR / f"{media_id}.mp4"
+
+
+def enqueue_proxy_job(media_id: str) -> None:
+    now = utc_now()
+    with closing(open_db()) as connection:
+        connection.execute(
+            """
+            INSERT INTO thumbnail_jobs (id, media_id, status, attempts, created_at, updated_at)
+            VALUES (?, ?, 'queued', 0, ?, ?)
+            ON CONFLICT(media_id) DO UPDATE SET
+                status = 'queued',
+                last_error = NULL,
+                updated_at = excluded.updated_at
+            """,
+            (str(uuid4()), media_id, now, now),
+        )
+        connection.execute(
+            "UPDATE media_items SET proxy_state = 'pending' WHERE id = ?", (media_id,)
+        )
+        connection.commit()
+
+
+def enqueue_all_proxies(client_id: str) -> int:
+    """Queue every video that has no proxy yet."""
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            "SELECT id FROM media_items WHERE client_id = ? AND media_type = 'video' "
+            "AND proxy_state != 'ready'",
+            (client_id,),
+        ).fetchall()
+    for row in rows:
+        enqueue_proxy_job(row["id"])
+    return len(rows)
+
+
+def next_proxy_job() -> sqlite3.Row | None:
+    """Next video awaiting a proxy.
+
+    Deliberately separate from the thumbnail queue: proxies are expensive and
+    optional, so they must never starve thumbnail generation for new uploads.
+    """
+    with closing(open_db()) as connection:
+        return connection.execute(
+            """
+            SELECT media_items.id, media_items.local_path, media_items.duration
+            FROM media_items
+            WHERE media_items.media_type = 'video' AND media_items.proxy_state = 'pending'
+              AND media_items.file_state = 'present'
+            ORDER BY media_items.capture_time DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+
+def mark_proxy_done(media_id: str) -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE media_items SET proxy_state = 'ready', updated_at = ? WHERE id = ?",
+            (utc_now(), media_id),
+        )
+        connection.commit()
+
+
+def mark_proxy_failed(media_id: str, error: str | None = None) -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE media_items SET proxy_state = 'failed', updated_at = ? WHERE id = ?",
+            (utc_now(), media_id),
+        )
+        connection.commit()
+    if error:
+        import logging  # noqa: PLC0415
+        logging.getLogger(__name__).warning("proxy failed for %s: %s", media_id, error)
+
+
+def proxy_status(client_id: str) -> dict:
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            "SELECT proxy_state, COUNT(*) AS total FROM media_items "
+            "WHERE client_id = ? AND media_type = 'video' GROUP BY proxy_state",
+            (client_id,),
+        ).fetchall()
+    counts = {row["proxy_state"]: row["total"] for row in rows}
+    total = sum(counts.values())
+    return {
+        "total": total,
+        "ready": counts.get("ready", 0),
+        "pending": counts.get("pending", 0),
+        "failed": counts.get("failed", 0),
+    }
+
+
+def proxy_ready(media_id: str) -> bool:
+    with closing(open_db()) as connection:
+        row = connection.execute(
+            "SELECT proxy_state FROM media_items WHERE id = ?", (media_id,)
+        ).fetchone()
+    if not row or row["proxy_state"] != "ready":
+        return False
+    return proxy_paths(media_id).is_file()

@@ -106,6 +106,7 @@ function itemFromApi(media: ApiMedia): MediaItem {
     microUrl: media.thumb_state === 'ready' ? mediaUrl(`${media.preview_url.replace('/thumbnail', '/micro-thumbnail')}`) : undefined,
     contentUrl: media.content_url ? mediaUrl(media.content_url) : undefined,
     telegramUrl: media.telegram_url ? mediaUrl(media.telegram_url) : undefined,
+    proxyUrl: media.proxy_url ? mediaUrl(media.proxy_url) : undefined,
     downloadUrl: media.telegram_download_url ? mediaUrl(media.telegram_download_url) : undefined,
     size: media.size,
     capturedAt: new Date(media.captured_at),
@@ -1184,6 +1185,9 @@ function MediaViewer({ item, items, onChange, onClose }: { item: MediaItem; item
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  // Videos default to the small proxy; this flips to the Telegram original on
+  // request or when the proxy fails.
+  const [playingOriginal, setPlayingOriginal] = useState(false)
   const currentIndex = items.findIndex((candidate) => candidate.id === item.id)
   const hasPrevious = currentIndex > 0
   const hasNext = currentIndex >= 0 && currentIndex < items.length - 1
@@ -1191,6 +1195,9 @@ function MediaViewer({ item, items, onChange, onClose }: { item: MediaItem; item
   useEffect(() => {
     setLoading(true)
     setError('')
+    // Each video starts on its proxy again rather than inheriting the previous
+    // clip's "play original" choice.
+    setPlayingOriginal(false)
   }, [item.id])
 
   useEffect(() => {
@@ -1218,6 +1225,20 @@ function MediaViewer({ item, items, onChange, onClose }: { item: MediaItem; item
             <h2 id="viewer-title">{item.name}</h2>
           </div>
           <div className="viewer-actions">
+            {item.type === 'video' && item.proxyUrl && (
+              <button
+                className="download-button"
+                type="button"
+                onClick={() => setPlayingOriginal((v) => !v)}
+                title={
+                  playingOriginal
+                    ? 'Full quality, downloads the whole file first'
+                    : 'A smaller copy that starts instantly'
+                }
+              >
+                {playingOriginal ? 'Playing original' : 'Playing preview'}
+              </button>
+            )}
             {item.downloadUrl && <a className="download-button" href={item.downloadUrl} download={item.name}><Download size={15} /> Download original</a>}
             <button className="modal-close icon-button" type="button" aria-label="Close viewer" onClick={onClose}><X size={18} /></button>
           </div>
@@ -1228,7 +1249,27 @@ function MediaViewer({ item, items, onChange, onClose }: { item: MediaItem; item
           {error ? <div className="viewer-error"><AlertCircle size={22} /><strong>Telegram media unavailable</strong><span>{error}</span><button className="viewer-retry" type="button" onClick={retry}><RefreshCw size={13} /> Try again</button></div> : item.type === 'photo' ? (
             <img key={`${item.id}-${attempt}`} src={item.telegramUrl} alt={item.name} onLoad={() => setLoading(false)} onError={() => { setLoading(false); setError('Reconnect Telegram and try viewing it again.') }} />
           ) : (
-            <video key={`${item.id}-${attempt}`} src={item.telegramUrl} controls autoPlay playsInline onLoadedData={() => setLoading(false)} onError={() => { setLoading(false); setError('This video format cannot be played here. The original file is still in Telegram.') }} />
+            <video
+              key={`${item.id}-${attempt}-${playingOriginal ? 'orig' : 'proxy'}`}
+              src={playingOriginal ? item.telegramUrl : item.proxyUrl ?? item.telegramUrl}
+              controls
+              autoPlay
+              playsInline
+              preload="metadata"
+              onLoadedData={() => setLoading(false)}
+              onError={() => {
+                setLoading(false)
+                // Falling back automatically matters: an old library predates
+                // proxies, and a proxy can fail on an exotic codec. The
+                // original always exists if the file survived.
+                if (!playingOriginal && item.telegramUrl) {
+                  setPlayingOriginal(true)
+                  setLoading(true)
+                } else {
+                  setError('This video format cannot be played here. The original file is still in Telegram.')
+                }
+              }}
+            />
           )}
           {hasNext && <button className="viewer-nav viewer-nav-right" type="button" aria-label="Next item" onClick={() => onChange(items[currentIndex + 1])}><ChevronRight size={25} /></button>}
         </div>

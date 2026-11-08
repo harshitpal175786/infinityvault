@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, CheckCircle2, CloudUpload, DatabaseBackup, HardDrive, RefreshCw, ShieldCheck } from 'lucide-react'
-import { applyRestore, backupMetadata, checkIntegrity, getBackupStatus, getIntegrityStatus, listBrokenMedia, scanForRestore } from '../api'
+import { applyRestore, backupMetadata, buildVideoProxies, checkIntegrity, getBackupStatus, getIntegrityStatus, getVideoStatus, listBrokenMedia, scanForRestore, type VideoStatus } from '../api'
 import type { ApiMedia, BackupState, IntegritySummary, RestoreScan } from '../api'
 
 function formatChecked(value: string | null): string {
@@ -29,17 +29,20 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
   const [scan, setScan] = useState<RestoreScan | null>(null)
   const [busy, setBusy] = useState<'scan' | 'restore' | 'backup' | null>(null)
   const [backupState, setBackupState] = useState<BackupState | null>(null)
+  const [videos, setVideos] = useState<VideoStatus | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [nextSummary, nextBroken, nextBackup] = await Promise.all([
+      const [nextSummary, nextBroken, nextBackup, nextVideos] = await Promise.all([
         getIntegrityStatus(),
         listBrokenMedia(),
         getBackupStatus().catch(() => null),
+        getVideoStatus().catch(() => null),
       ])
       setSummary(nextSummary)
       setBroken(nextBroken)
       if (nextBackup) setBackupState(nextBackup)
+      if (nextVideos) setVideos(nextVideos)
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'Could not read library health.')
     }
@@ -125,6 +128,55 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
         <div className="utility-card-head">
           <span className="utility-icon"><ShieldCheck size={18} /></span>
           <div>
+            <h3>Video previews</h3>
+            <p className="utility-copy">
+              A preview is a small copy of each video, built once so playback starts
+              immediately and the timeline can be scrubbed. The original is untouched
+              and still downloads in full.
+            </p>
+            {videos && (
+              <p className="utility-meta">
+                {videos.ready} of {videos.total} ready
+                {videos.pending > 0 ? ` · ${videos.pending} waiting` : ''}
+                {videos.failed > 0 ? ` · ${videos.failed} failed` : ''}
+              </p>
+            )}
+            {videos && !videos.available && (
+              <p className="utility-warning">ffmpeg is not installed, so previews cannot be built.</p>
+            )}
+            <button
+              className="primary-button"
+              type="button"
+              // Only meaningful when something is actually missing: a button
+              // that does nothing is worse than a disabled one.
+              disabled={
+                busy !== null ||
+                !videos?.available ||
+                videos.pending > 0 ||
+                (videos.total > 0 && videos.ready === videos.total)
+              }
+              onClick={async () => {
+                setBusy('scan')
+                try {
+                  const result = await buildVideoProxies()
+                  setVideos(result)
+                  onNotice(
+                    result.queued > 0
+                      ? `Building ${result.queued} video preview${result.queued === 1 ? '' : 's'} in the background.`
+                      : 'Every video already has a preview.',
+                  )
+                } catch (error) {
+                  onNotice(error instanceof Error ? error.message : 'Previews could not be queued.')
+                } finally {
+                  setBusy(null)
+                }
+              }}
+            >
+              Build missing previews
+            </button>
+            {videos && videos.total > 0 && videos.ready === videos.total && (
+              <p className="utility-meta">Every video already has a preview.</p>
+            )}
             <h3>Library integrity</h3>
             <p className="utility-sub">
               Confirms each backed-up original still exists in Telegram. This checks presence,

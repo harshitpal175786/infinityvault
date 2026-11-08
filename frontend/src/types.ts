@@ -13,6 +13,7 @@ export type MediaItem = {
   /** Full-size original, only fetched on explicit download. */
   contentUrl?: string
   telegramUrl?: string
+  proxyUrl?: string
   downloadUrl?: string
   size: number
   capturedAt: Date

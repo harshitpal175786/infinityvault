@@ -75,6 +75,8 @@ export type ApiMedia = {
   content_url?: string
   thumb_state?: 'pending' | 'running' | 'ready' | 'failed'
   telegram_url?: string
+  proxy_url?: string | null
+  proxy_state?: string
   telegram_download_url?: string
   upload_status: UploadStatus
   upload_error?: string
@@ -451,4 +453,22 @@ export function listCameras(): Promise<CameraOption[]> {
 
 export function backfillCameras(): Promise<{ checked: number; labeled: number; remaining: number }> {
   return request('/api/cameras/backfill', { method: 'POST' })
+}
+
+export type VideoStatus = {
+  available: boolean
+  ffmpeg: string | null
+  error: string | null
+  total: number
+  ready: number
+  pending: number
+  failed: number
+}
+
+export function getVideoStatus(): Promise<VideoStatus> {
+  return request<VideoStatus>('/api/videos/status')
+}
+
+export function buildVideoProxies(): Promise<VideoStatus & { queued: number }> {
+  return request('/api/videos/proxies', { method: 'POST' })
 }
