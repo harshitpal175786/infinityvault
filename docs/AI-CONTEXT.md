@@ -1,7 +1,9 @@
 # AI Context Handoff — InfinityVault
 
 > **For an AI coding agent picking this up cold.**
-> Read this file first, then `docs/PRF.md` for priorities.
+> Read this file first, then **`docs/PRD-PHASES.md`** for the active plan and
+> `docs/PHASE-LOG.md` for exactly how far along it is.
+> `docs/PRF.md` is background/priorities; the phased PRD supersedes its §10.
 > Everything below was verified against the code, not assumed.
 > Last updated: 2026-02-14 · branch `feat/infinityvault-setup`
 
@@ -75,7 +77,9 @@ infinityvault/
       components/ThemeToggle.tsx
       api.ts / media.ts / types.ts
   docs/
-    PRF.md                         ← priorities, read after this file
+    PRD-PHASES.md                  ← ACTIVE PLAN: phases 1-7, task by task
+    PHASE-LOG.md                   ← living checklist: what is done, right now
+    PRF.md                         ← background + priorities (superseded by PRD §10)
     prd-ui-immich-alignment.md     design PRD + face appendix
     token-reconciliation.md        Immich-derived token values
     research/immich-synology-analysis.md
@@ -320,11 +324,12 @@ Anchors reconciled against real Immich at commit `87ef895`:
 
 ## 11. Suggested first actions for a new agent
 
-1. Read `docs/PRF.md` §6 and §10.
-2. Run the two verification commands in §1 to confirm a clean baseline.
-3. Implement **P0** (`local_path` reconciliation) — small, testable, unblocks
-   face analysis on existing rows.
-4. Then **P1** token auth.
+1. Read `docs/PRD-PHASES.md` §1 (the architectural rule) and §3 (definition of done).
+2. Check `docs/PHASE-LOG.md` — it states the current phase and the next unticked task.
+3. Run the two verification commands in §1 to confirm a clean baseline.
+4. Implement the next unticked task, starting at Phase 1.1
+   (`local_path` reconciliation) if nothing is marked in progress.
+5. Update `docs/PHASE-LOG.md` in the same commit as the work.
 5. Ask the user the outstanding product questions before building UI:
    - Is InfinityVault personal-only, or might it be released? (decides whether
      `buffalo_s` weights are acceptable)
