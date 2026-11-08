@@ -8,7 +8,7 @@
  * interact with layout outside this element.
  */
 
-import { Archive, ChevronsLeft, ChevronsRight, Compass, Film, Folder, Images, ImagePlus, Plus, ScanFace, Send, Settings2, ShieldCheck, Sparkles, Star, Trash2 } from 'lucide-react'
+import { Archive, ChevronsLeft, ChevronsRight, Compass, Film, Images, ImagePlus, ScanFace, Send, Settings2, ShieldCheck, Sparkles, Star, Trash2 } from 'lucide-react'
 import { ThemeToggle } from './ThemeToggle'
 
 import type { Album } from '../api'
@@ -80,7 +80,9 @@ export function Sidebar({
             <span>Albums</span>
             <span className="nav-count">{albums.length}</span>
           </button>
-          {albums.map((album) => <button className={libraryView === 'album' && activeAlbumId === album.id ? 'nav-item nested active' : 'nav-item nested'} type="button" key={album.id} onClick={() => openView('album', album.id)}><Folder size={16} /><span>{album.name}</span><span className="nav-count">{album.media_count}</span></button>)}
+          {/* Individual albums deliberately stay out of the sidebar: with 37 of
+              them the navigation became a wall of rows. The Albums page is the
+              single place to browse them. */}
           <button className={libraryView === 'favorites' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('favorites')}>
             <Star size={18} />
             <span>Favorites</span><span className="nav-count">{items.filter((item) => item.isFavorite).length}</span>
