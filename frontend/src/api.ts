@@ -181,8 +181,11 @@ export async function listMediaPage(
   albumId?: string,
   cursor?: string | null,
   limit = 200,
+  filters: MediaFilterParams = {},
 ): Promise<MediaPage> {
   const params = new URLSearchParams({ view, limit: String(limit) })
+  const extra = filterQuery(filters)
+  if (extra) new URLSearchParams(extra).forEach((v, k) => params.set(k, v))
   if (search.trim()) params.set('search', search.trim())
   if (albumId) params.set('album_id', albumId)
   if (cursor) params.set('cursor', cursor)
@@ -209,6 +212,8 @@ export async function uploadMedia(item: MediaItem): Promise<ApiMedia> {
   if (item.width) form.append('width', String(item.width))
   if (item.height) form.append('height', String(item.height))
   if (item.duration !== undefined) form.append('duration', String(item.duration))
+  if (item.latitude !== undefined) form.append('latitude', String(item.latitude))
+  if (item.longitude !== undefined) form.append('longitude', String(item.longitude))
   return request<ApiMedia>('/api/media', { method: 'POST', body: form })
 }
 
@@ -374,4 +379,61 @@ export function mergePeople(sourceId: string, targetId: string): Promise<{ merge
 
 export function listPersonMedia(personId: string): Promise<ApiMedia[]> {
   return request<ApiMedia[]>(`/api/people/${personId}/media`)
+}
+
+export type GeoPoint = {
+  id: string
+  name: string
+  captured_at: string
+  latitude: number
+  longitude: number
+  thumb_ready: boolean
+  preview_url: string
+}
+
+export type DuplicateGroup = {
+  checksum: string
+  copies: number
+  wasted_bytes: number
+  items: { id: string; name: string; captured_at: string; size: number; preview_url: string }[]
+}
+
+export function listGeoPoints(): Promise<GeoPoint[]> {
+  return request<GeoPoint[]>('/api/geo/points')
+}
+
+export function backfillGeo(): Promise<{ checked: number; located: number; remaining: number }> {
+  return request('/api/geo/backfill', { method: 'POST' })
+}
+
+export function listDuplicates(): Promise<DuplicateGroup[]> {
+  return request<DuplicateGroup[]>('/api/duplicates')
+}
+
+export function listMemories(): Promise<{ month: number; day: number; items: ApiMedia[] }> {
+  return request('/api/memories')
+}
+
+export function listRecentlyAdded(limit = 60): Promise<ApiMedia[]> {
+  return request<ApiMedia[]>(`/api/recently-added?limit=${limit}`)
+}
+
+export type MediaFilterParams = {
+  dateFrom?: string
+  dateTo?: string
+  mediaType?: 'photo' | 'video'
+  hasFaces?: boolean
+  hasLocation?: boolean
+  sort?: 'newest' | 'oldest'
+}
+
+export function filterQuery(filters: MediaFilterParams): string {
+  const params = new URLSearchParams()
+  if (filters.dateFrom) params.set('date_from', filters.dateFrom)
+  if (filters.dateTo) params.set('date_to', filters.dateTo)
+  if (filters.mediaType) params.set('media_type', filters.mediaType)
+  if (filters.hasFaces !== undefined) params.set('has_faces', String(filters.hasFaces))
+  if (filters.hasLocation !== undefined) params.set('has_location', String(filters.hasLocation))
+  if (filters.sort) params.set('sort', filters.sort)
+  return params.toString()
 }

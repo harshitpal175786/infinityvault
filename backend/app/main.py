@@ -190,6 +190,55 @@ def health() -> dict[str, str]:
 # place meant an authenticated request with no header silently read whatever
 # rows were stored under that id -- the request still succeeded, which hid the
 # mistake. Requests must now name the id explicitly.
+def read_image_coordinates(path: Path) -> tuple[float, float] | None:
+    """Pull GPS out of an image's EXIF, if it has a usable fix.
+
+    Pillow is already a core dependency for thumbnails, so this adds nothing.
+    Returns None rather than raising for the many photos with no EXIF at all.
+    """
+    try:
+        from PIL import Image  # noqa: PLC0415
+        from PIL.ExifTags import GPSTAGS, TAGS  # noqa: PLC0415
+    except ImportError:
+        return None
+
+    try:
+        with Image.open(path) as image:
+            exif = image.getexif()
+            if not exif:
+                return None
+            gps_info = exif.get_ifd(0x8825)
+    except Exception:
+        return None
+    if not gps_info:
+        return None
+
+    gps = {GPSTAGS.get(key, key): value for key, value in gps_info.items()}
+
+    def to_degrees(value) -> float | None:
+        try:
+            if isinstance(value, (tuple, list)) and len(value) == 3:
+                degrees, minutes, seconds = (float(part) for part in value)
+                return degrees + minutes / 60 + seconds / 3600
+            return float(value)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+
+    latitude = to_degrees(gps.get("GPSLatitude"))
+    longitude = to_degrees(gps.get("GPSLongitude"))
+    if latitude is None or longitude is None:
+        return None
+    if str(gps.get("GPSLatitudeRef", "N")).upper().startswith("S"):
+        latitude = -latitude
+    if str(gps.get("GPSLongitudeRef", "E")).upper().startswith("W"):
+        longitude = -longitude
+
+    normalized_lat, normalized_lon = db.normalize_coordinates(latitude, longitude)
+    if normalized_lat is None or normalized_lon is None:
+        return None
+    return normalized_lat, normalized_lon
+
+
 def resolve_client_id(client_id: str | None, query_client_id: str | None = None) -> str:
     resolved = query_client_id or client_id
     if not resolved:
@@ -272,6 +321,12 @@ def get_media(
     album_id: str | None = Query(default=None),
     cursor: str | None = Query(default=None),
     limit: int | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    media_type: str | None = Query(default=None),
+    has_faces: bool | None = Query(default=None),
+    has_location: bool | None = Query(default=None),
+    sort: str = Query(default="newest"),
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> Any:
@@ -284,7 +339,18 @@ def get_media(
 
     client_id = resolve_client_id(client_id, query_client_id)
     if cursor is None and limit is None:
-        rows = db.list_media(client_id, view=view, query=search, album_id=album_id)
+        rows = db.list_media(
+            client_id,
+            view=view,
+            query=search,
+            album_id=album_id,
+            date_from=date_from,
+            date_to=date_to,
+            media_type=media_type,
+            has_faces=has_faces,
+            has_location=has_location,
+            sort=sort,
+        )
         return [db.row_to_media(row) for row in rows]
 
     try:
@@ -295,6 +361,12 @@ def get_media(
             album_id=album_id,
             cursor=cursor,
             limit=limit or db.DEFAULT_PAGE_SIZE,
+            date_from=date_from,
+            date_to=date_to,
+            media_type=media_type,
+            has_faces=has_faces,
+            has_location=has_location,
+            sort=sort,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -312,6 +384,8 @@ async def upload_media(
     width: int | None = Form(default=None),
     height: int | None = Form(default=None),
     duration: float | None = Form(default=None),
+    latitude: float | None = Form(default=None),
+    longitude: float | None = Form(default=None),
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict:
     client_id = resolve_client_id(client_id)
@@ -363,6 +437,8 @@ async def upload_media(
         # Stored relative to DATA_DIR so the library survives a folder move.
         local_path=db.to_relative(local_path),
         checksum=checksum,
+        latitude=latitude,
+        longitude=longitude,
     )
     # Thumbnails are generated in the background for photos and videos alike.
     try:
@@ -512,11 +588,11 @@ def media_thumbnail(
     tells the UI whether it is looking at a real thumbnail.
     """
 
-    client_id = resolve_client_id(client_id)
     # <img>/<video> cannot send X-Client-ID, so the query param is the normal
-    # path for these two endpoints.
-    effective_client_id = query_client_id or client_id
-    row = db.get_media(media_id, effective_client_id)
+    # path for these endpoints -- resolve it here rather than ignoring it and
+    # rejecting every image request with 400.
+    client_id = resolve_client_id(client_id, query_client_id)
+    row = db.get_media(media_id, client_id)
     if not row:
         raise HTTPException(status_code=404, detail="Media not found")
 
@@ -560,8 +636,8 @@ def media_micro_thumbnail(
 ):
     """Tiny blurred placeholder for progressive tile loading."""
 
-    client_id = resolve_client_id(client_id)
-    effective_client_id = query_client_id or client_id
+    client_id = resolve_client_id(client_id, query_client_id)
+    effective_client_id = client_id
     row = db.get_media(media_id, effective_client_id)
     if not row:
         raise HTTPException(status_code=404, detail="Media not found")
@@ -598,7 +674,8 @@ def media_content(
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> FileResponse:
-    client_id = resolve_client_id(client_id)
+    # <video> and download anchors cannot set headers, so the query param is a
+    # normal path here. The header-only call raised 400 before this ran.
     effective_client_id = resolve_client_id(client_id, query_client_id)
     row = db.get_media(media_id, effective_client_id)
     if not row:
@@ -616,7 +693,8 @@ async def telegram_media_content(
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> FileResponse:
-    client_id = resolve_client_id(client_id)
+    # <video> and download anchors cannot set headers, so the query param is a
+    # normal path here. The header-only call raised 400 before this ran.
     effective_client_id = resolve_client_id(client_id, query_client_id)
     service = telegram_service(request)
     try:
@@ -639,7 +717,8 @@ async def telegram_media_download(
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> FileResponse:
-    client_id = resolve_client_id(client_id)
+    # <video> and download anchors cannot set headers, so the query param is a
+    # normal path here. The header-only call raised 400 before this ran.
     effective_client_id = resolve_client_id(client_id, query_client_id)
     service = telegram_service(request)
     try:
@@ -780,6 +859,91 @@ async def integrity_check(
         return await telegram_service(request).check_integrity(client_id, limit=limit)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/api/geo/backfill")
+def geo_backfill(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    limit: int = Query(default=500, ge=1, le=5000),
+) -> dict:
+    """Read GPS out of local originals uploaded before locations were captured.
+
+    Only touches rows whose local copy is present; a photo whose file is gone
+    is skipped rather than guessed at.
+    """
+    client_id = resolve_client_id(client_id)
+    candidates = db.photos_missing_gps(client_id)[:limit]
+    found = 0
+    checked = 0
+    for row in candidates:
+        path = db.resolve_local_path(row["local_path"])
+        if not path or not path.is_file():
+            continue
+        checked += 1
+        coordinates = read_image_coordinates(path)
+        if not coordinates:
+            continue
+        latitude, longitude = coordinates
+        db.set_media_coordinates(row["id"], latitude, longitude)
+        found += 1
+    # Report what is genuinely left, not an estimate of the batch.
+    remaining = len(db.photos_missing_gps(client_id))
+    return {"checked": checked, "located": found, "remaining": remaining}
+
+
+@app.get("/api/geo/points")
+def geo_points(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+) -> list[dict]:
+    """Photos with a location, newest first."""
+    client_id = resolve_client_id(client_id, query_client_id)
+    return [
+        {
+            "id": row["id"],
+            "name": row["original_name"],
+            "captured_at": row["capture_time"],
+            "latitude": row["latitude"],
+            "longitude": row["longitude"],
+            "thumb_ready": row["thumb_state"] == "ready",
+            "preview_url": f"/api/media/{row['id']}/thumbnail",
+        }
+        for row in db.geotagged_points(client_id)
+    ]
+
+
+@app.get("/api/duplicates")
+def duplicates(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+) -> list[dict]:
+    """Media stored more than once, reported but never auto-deleted."""
+    return db.duplicate_groups(resolve_client_id(client_id))
+
+
+@app.get("/api/memories")
+def memories(
+    month: int | None = Query(default=None, ge=1, le=12),
+    day: int | None = Query(default=None, ge=1, le=31),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+) -> dict:
+    """Photos from this day in earlier years."""
+    client_id = resolve_client_id(client_id)
+    today = datetime.now()
+    rows = db.on_this_day(client_id, month or today.month, day or today.day)
+    return {
+        "month": month or today.month,
+        "day": day or today.day,
+        "items": [db.row_to_media(row) for row in rows],
+    }
+
+
+@app.get("/api/recently-added")
+def recently_added(
+    limit: int = Query(default=60, ge=1, le=500),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+) -> list[dict]:
+    """Newest arrivals by library date, not capture date."""
+    return [db.row_to_media(row) for row in db.recently_added(resolve_client_id(client_id), limit)]
 
 
 @app.get("/api/backup/status")

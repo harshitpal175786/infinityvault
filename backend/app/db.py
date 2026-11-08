@@ -259,6 +259,28 @@ def delete_telegram_connection(client_id: str) -> None:
         connection.commit()
 
 
+def normalize_coordinates(
+    latitude: float | None, longitude: float | None
+) -> tuple[float | None, float | None]:
+    """Reject impossible or null-island coordinates.
+
+    EXIF writers emit 0,0 when there is no fix. Storing that would place a pin
+    in the Gulf of Guinea, which is worse than showing nothing on the map.
+    """
+    if latitude is None or longitude is None:
+        return None, None
+    try:
+        lat = float(latitude)
+        lon = float(longitude)
+    except (TypeError, ValueError):
+        return None, None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None, None
+    if lat == 0.0 and lon == 0.0:
+        return None, None
+    return lat, lon
+
+
 def create_media(
     client_id: str,
     original_name: str,
@@ -272,17 +294,20 @@ def create_media(
     duration: float | None,
     local_path: str,
     checksum: str,
+    latitude: float | None = None,
+    longitude: float | None = None,
 ) -> str:
     media_id = str(uuid4())
     now = utc_now()
+    latitude, longitude = normalize_coordinates(latitude, longitude)
     with closing(open_db()) as connection:
         connection.execute(
             """
             INSERT INTO media_items
                 (id, client_id, original_name, media_type, mime_type, size_bytes,
                 capture_time, capture_source, width, height, duration, local_path, checksum,
-                upload_status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+                latitude, longitude, upload_status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
             """,
             (
                 media_id,
@@ -298,6 +323,8 @@ def create_media(
                 duration,
                 local_path,
                 checksum,
+                latitude,
+                longitude,
                 now,
                 now,
             ),
@@ -342,7 +369,13 @@ def list_media(
     view: str = "library",
     query: str | None = None,
     album_id: str | None = None,
+    **filters: Any,
 ) -> list[sqlite3.Row]:
+    """Unpaged listing. Kept for the pre-pagination response shape.
+
+    Accepts the same filters as list_media_page so the two paths cannot drift
+    into returning different results for the same query.
+    """
     state_filter = {
         "library": "trashed_at IS NULL AND is_archived = 0",
         "favorites": "trashed_at IS NULL AND is_favorite = 1",
@@ -360,9 +393,14 @@ def list_media(
         search_filter = "AND (LOWER(original_name) LIKE ? OR LOWER(description) LIKE ? OR LOWER(COALESCE(folder_path, '')) LIKE ?)"
         term = f"%{query.strip().lower()}%"
         parameters.extend([term, term, term])
+    filter_fragments, filter_parameters = build_media_filters(**filters)
+    parameters.extend(filter_parameters)
+    order = "ASC" if filters.get("sort") == "oldest" else "DESC"
     with closing(open_db()) as connection:
         return list(connection.execute(
-            f"SELECT * FROM media_items WHERE client_id = ? AND {state_filter} {album_filter} {search_filter} ORDER BY capture_time DESC",
+            f"SELECT * FROM media_items WHERE client_id = ? AND {state_filter} "
+            f"{album_filter} {search_filter} {''.join(filter_fragments)} "
+            f"ORDER BY capture_time {order}",
             parameters,
         ).fetchall())
 
@@ -386,6 +424,48 @@ def decode_cursor(cursor: str) -> tuple[str, str]:
     return capture_time, media_id
 
 
+def build_media_filters(
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    media_type: str | None = None,
+    has_faces: bool | None = None,
+    has_location: bool | None = None,
+) -> tuple[list[str], list[Any]]:
+    """SQL fragments for the library filters.
+
+    Returns (clauses, parameters) so callers can splice them into their own
+    query without duplicating the column names or placeholder order.
+    """
+    clauses: list[str] = []
+    parameters: list[Any] = []
+
+    if date_from:
+        clauses.append("AND capture_time >= ?")
+        parameters.append(date_from)
+    if date_to:
+        # Inclusive end-of-day: callers pass a plain date, and a photo at
+        # 23:59 on that day must still match.
+        clauses.append("AND capture_time <= ?")
+        parameters.append(date_to if "T" in date_to else f"{date_to}T23:59:59.999Z")
+
+    if media_type in {"photo", "video"}:
+        clauses.append("AND media_type = ?")
+        parameters.append(media_type)
+
+    if has_faces is True:
+        clauses.append("AND EXISTS (SELECT 1 FROM faces WHERE faces.media_id = media_items.id)")
+    elif has_faces is False:
+        clauses.append("AND NOT EXISTS (SELECT 1 FROM faces WHERE faces.media_id = media_items.id)")
+
+    if has_location is True:
+        clauses.append("AND latitude IS NOT NULL AND longitude IS NOT NULL")
+    elif has_location is False:
+        clauses.append("AND (latitude IS NULL OR longitude IS NULL)")
+
+    return clauses, parameters
+
+
 def list_media_page(
     client_id: str,
     view: str = "library",
@@ -393,6 +473,12 @@ def list_media_page(
     album_id: str | None = None,
     cursor: str | None = None,
     limit: int = DEFAULT_PAGE_SIZE,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    media_type: str | None = None,
+    has_faces: bool | None = None,
+    has_location: bool | None = None,
+    sort: str = "newest",
 ) -> tuple[list[sqlite3.Row], str | None]:
     """One page of media, newest first, using a keyset cursor.
 
@@ -426,11 +512,27 @@ def list_media_page(
         term = f"%{query.strip().lower()}%"
         parameters.extend([term, term, term])
 
+    filter_fragments, filter_parameters = build_media_filters(
+        date_from=date_from,
+        date_to=date_to,
+        media_type=media_type,
+        has_faces=has_faces,
+        has_location=has_location,
+    )
+    extra_filter = "".join(filter_fragments)
+    parameters.extend(filter_parameters)
+
+    # Sorting flips the comparison direction, so the keyset predicate must flip
+    # with it, otherwise "load more" would re-serve rows already on screen.
+    ascending = sort == "oldest"
+    order = "ASC" if ascending else "DESC"
     cursor_filter = ""
     if cursor:
         cursor_time, cursor_id = decode_cursor(cursor)
-        # Strictly "after" the cursor in (capture_time DESC, id DESC) order.
-        cursor_filter = "AND (capture_time < ? OR (capture_time = ? AND id < ?))"
+        operator = ">" if ascending else "<"
+        cursor_filter = (
+            f"AND (capture_time {operator} ? OR (capture_time = ? AND id {operator} ?))"
+        )
         parameters.extend([cursor_time, cursor_time, cursor_id])
 
     # Fetch one extra row to learn whether another page exists without a
@@ -440,8 +542,8 @@ def list_media_page(
     with closing(open_db()) as connection:
         rows = list(connection.execute(
             f"SELECT * FROM media_items WHERE client_id = ? AND {state_filter} "
-            f"{album_filter} {search_filter} {cursor_filter} "
-            f"ORDER BY capture_time DESC, id DESC LIMIT ?",
+            f"{album_filter} {search_filter} {extra_filter} {cursor_filter} "
+            f"ORDER BY capture_time {order}, id {order} LIMIT ?",
             parameters,
         ).fetchall())
 
@@ -1627,3 +1729,139 @@ def backup_state(client_id: str) -> dict[str, Any]:
         "threshold": AUTO_BACKUP_THRESHOLD,
         "due": pending >= AUTO_BACKUP_THRESHOLD,
     }
+
+
+# ---------------------------------------------------------------------------
+# GPS backfill
+#
+# Coordinates were never captured before this phase, so every photo uploaded
+# earlier has NULL latitude/longitude even though the original in Telegram
+# still carries its EXIF. Reading the local copy recovers it without
+# re-downloading anything.
+# ---------------------------------------------------------------------------
+
+
+def photos_missing_gps(client_id: str) -> list[sqlite3.Row]:
+    with closing(open_db()) as connection:
+        return list(connection.execute(
+            """
+            SELECT id, local_path FROM media_items
+            WHERE client_id = ? AND media_type = 'photo'
+              AND latitude IS NULL AND file_state = 'present'
+            ORDER BY capture_time DESC
+            """,
+            (client_id,),
+        ).fetchall())
+
+
+def set_media_coordinates(media_id: str, latitude: float, longitude: float) -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE media_items SET latitude = ?, longitude = ?, updated_at = ? WHERE id = ?",
+            (latitude, longitude, utc_now(), media_id),
+        )
+        connection.commit()
+
+
+def geotagged_points(client_id: str) -> list[sqlite3.Row]:
+    """Every photo that has a real location, for the map."""
+    with closing(open_db()) as connection:
+        return list(connection.execute(
+            """
+            SELECT id, original_name, capture_time, latitude, longitude,
+                   thumb_state, media_type
+            FROM media_items
+            WHERE client_id = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+              AND COALESCE(trashed_at, '') = ''
+            ORDER BY capture_time DESC
+            """,
+            (client_id,),
+        ).fetchall())
+
+
+def duplicate_groups(client_id: str) -> list[dict[str, Any]]:
+    """Groups of media sharing a checksum -- the same bytes stored twice.
+
+    Upload already refuses a second copy of a known checksum, so anything found
+    here predates that guard. Reported rather than auto-deleted: the user
+    decides, because removing media rows is not reversible from the UI.
+    """
+    with closing(open_db()) as connection:
+        groups = connection.execute(
+            """
+            SELECT checksum, COUNT(*) AS copies, SUM(size_bytes) AS total_bytes
+            FROM media_items
+            WHERE client_id = ? AND COALESCE(checksum, '') <> '' AND COALESCE(trashed_at, '') = ''
+            GROUP BY checksum HAVING COUNT(*) > 1
+            ORDER BY SUM(size_bytes) DESC
+            """,
+            (client_id,),
+        ).fetchall()
+
+        results = []
+        for group in groups:
+            rows = connection.execute(
+                """
+                SELECT id, original_name, capture_time, size_bytes, thumb_state, local_path
+                FROM media_items
+                WHERE client_id = ? AND checksum = ? AND COALESCE(trashed_at, '') = ''
+                ORDER BY capture_time, created_at
+                """,
+                (client_id, group["checksum"]),
+            ).fetchall()
+            results.append({
+                "checksum": group["checksum"],
+                "copies": group["copies"],
+                # One copy is unavoidable; only the extras are reclaimable.
+                "wasted_bytes": group["total_bytes"] - rows[0]["size_bytes"],
+                "items": [
+                    {
+                        "id": row["id"],
+                        "name": row["original_name"],
+                        "captured_at": row["capture_time"],
+                        "size": row["size_bytes"],
+                        "preview_url": f"/api/media/{row['id']}/thumbnail",
+                    }
+                    for row in rows
+                ],
+            })
+        return results
+
+
+def on_this_day(client_id: str, month: int, day: int, years_back: int = 10) -> list[sqlite3.Row]:
+    """Photos taken on this month/day in previous years.
+
+    Matched on the month/day text rather than parsing dates in SQL, which
+    SQLite cannot do reliably across the stored ISO strings.
+    """
+    with closing(open_db()) as connection:
+        return list(connection.execute(
+            """
+            SELECT * FROM media_items
+            WHERE client_id = ?
+              AND COALESCE(trashed_at, '') = '' AND is_archived = 0
+              AND substr(capture_time, 6, 2) = ?
+              AND substr(capture_time, 9, 2) = ?
+            ORDER BY capture_time DESC
+            LIMIT ?
+            """,
+            (client_id, f"{month:02d}", f"{day:02d}", max(1, years_back) * 500),
+        ).fetchall())
+
+
+def recently_added(client_id: str, limit: int = 60) -> list[sqlite3.Row]:
+    """Newest by *when they entered the library*, not when they were taken.
+
+    A photo scanned from 2019 arrives today; a "recently added" view that
+    sorted by capture_time would bury it.
+    """
+    with closing(open_db()) as connection:
+        return list(connection.execute(
+            """
+            SELECT * FROM media_items
+            WHERE client_id = ? AND COALESCE(trashed_at, '') = ''
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (client_id, max(1, min(limit, 500))),
+        ).fetchall())

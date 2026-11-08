@@ -22,6 +22,7 @@ import {
   RefreshCw,
   RotateCcw,
   ScanFace,
+  Compass,
   Search,
   Send,
   Settings2,
@@ -41,12 +42,13 @@ import { ThemeToggle } from './components/ThemeToggle'
 import { UtilitiesPage } from './components/UtilitiesPage'
 import { TokenGate } from './components/TokenGate'
 import { PeoplePage } from './components/PeoplePage'
+import { ExplorePage } from './components/ExplorePage'
 import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listMedia, listMediaPage, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
-import type { Album, ApiMedia, Tag, TelegramAuthResponse, TelegramStatus } from './api'
+import type { Album, ApiMedia, MediaFilterParams, Tag, TelegramAuthResponse, TelegramStatus } from './api'
 import type { MediaItem, MediaType, UploadStatus } from './types'
 
 type Filter = 'all' | MediaType
-type LibraryView = 'library' | 'favorites' | 'archive' | 'trash' | 'album' | 'utilities' | 'people'
+type LibraryView = 'library' | 'favorites' | 'archive' | 'trash' | 'album' | 'utilities' | 'people' | 'explore'
 
 const filters: { value: Filter; label: string }[] = [
   { value: 'all', label: 'All media' },
@@ -145,6 +147,8 @@ function App() {
   const [filter, setFilter] = useState<Filter>('all')
   const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc')
   const [libraryView, setLibraryView] = useState<LibraryView>('library')
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [advancedFilters, setAdvancedFilters] = useState<MediaFilterParams>({})
   const [activeAlbumId, setActiveAlbumId] = useState<string>()
   const [albums, setAlbums] = useState<Album[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -183,7 +187,7 @@ function App() {
     setLoadingMore(true)
     try {
       const mediaView = libraryView === 'album' ? 'library' : libraryView
-      const page = await listMediaPage(mediaView, searchTerm, activeAlbumId, nextCursor)
+      const page = await listMediaPage(mediaView, searchTerm, activeAlbumId, nextCursor, 200, advancedFilters)
       // A view change mid-flight invalidates this page.
       if (seq !== requestSeq.current) return
       const known = new Set(items.map((item) => item.id))
@@ -203,7 +207,7 @@ function App() {
     try {
       const mediaView = libraryView === 'album' ? 'library' : libraryView
       const [page, savedTelegramStatus, savedAlbums, savedTags] = await Promise.all([
-        listMediaPage(mediaView, searchTerm, activeAlbumId, null),
+        listMediaPage(mediaView, searchTerm, activeAlbumId, null, 200, advancedFilters),
         getTelegramStatus(),
         listAlbums(),
         listTags(),
@@ -226,11 +230,17 @@ function App() {
         // Preserve pages the user already loaded with "Load more". The poll
         // runs every 2s and only fetches page 1, so replacing the list here
         // would silently discard everything beyond the first page.
+        //
+        // Exception: a filter change is a new result set, so carrying rows over
+        // would keep ones the filter excluded. loadedPagesRef is reset to 1 in
+        // that case, so only the first page is authoritative.
         const firstPageIds = new Set(remote.map((item) => item.id))
-        const beyondFirstPage = current.filter(
-          (item) => item.uploadStatus !== 'local' && item.uploadStatus !== 'queued'
-            && !firstPageIds.has(item.id),
-        )
+        const beyondFirstPage = loadedPagesRef.current <= 1
+          ? []
+          : current.filter(
+            (item) => item.uploadStatus !== 'local' && item.uploadStatus !== 'queued'
+              && !firstPageIds.has(item.id),
+          )
 
         return [...stillLocalOnly, ...remote, ...beyondFirstPage]
       })
@@ -295,7 +305,7 @@ function App() {
     setNextCursor(null)
     void refreshLibrary()
     setSelectedIds(new Set())
-  }, [libraryView, activeAlbumId, authReady])
+  }, [libraryView, activeAlbumId, authReady, advancedFilters])
 
   // Debounced server-backed search. Typing previously filtered only the
   // already-loaded page in memory, so matches in descriptions and folder
@@ -333,12 +343,20 @@ function App() {
     // Server search already narrowed the set (name, description, folder path).
     // This only applies the media-type filter and local ordering, so it can
     // never hide a row the server deliberately returned.
+    //
+    // The advanced "Order" filter sorts server-side *before* pagination, so it
+    // must win here; sorting again would reverse it and make "oldest first"
+    // show only the oldest page in newest-first order.
+    const useServerOrder = advancedFilters.sort === 'oldest'
     return items
       .filter((item) => filter === 'all' || item.type === filter)
-      .sort((first, second) => sortDirection === 'desc'
-        ? second.capturedAt.getTime() - first.capturedAt.getTime()
-        : first.capturedAt.getTime() - second.capturedAt.getTime())
-  }, [filter, items, sortDirection])
+      .sort((first, second) => {
+        if (useServerOrder) return first.capturedAt.getTime() - second.capturedAt.getTime()
+        return sortDirection === 'desc'
+          ? second.capturedAt.getTime() - first.capturedAt.getTime()
+          : first.capturedAt.getTime() - second.capturedAt.getTime()
+      })
+  }, [filter, items, sortDirection, advancedFilters.sort])
 
   const groupedItems = useMemo(() => {
     const groups = new Map<string, { label: string; date: Date; items: MediaItem[] }>()
@@ -357,10 +375,15 @@ function App() {
       }
     })
 
-    return Array.from(groups.values()).sort((first, second) => sortDirection === 'desc'
-      ? second.date.getTime() - first.date.getTime()
-      : first.date.getTime() - second.date.getTime())
-  }, [filteredItems, sortDirection])
+    // Group order must follow the same rule as the items inside them, or
+    // "oldest first" would still render its date headings newest-first.
+    const ascending = advancedFilters.sort === 'oldest'
+      ? true
+      : sortDirection === 'asc'
+    return Array.from(groups.values()).sort((first, second) => ascending
+      ? first.date.getTime() - second.date.getTime()
+      : second.date.getTime() - first.date.getTime())
+  }, [filteredItems, sortDirection, advancedFilters.sort])
 
   const totalSize = items.reduce((total, item) => total + item.size, 0)
   const photoCount = items.filter((item) => item.type === 'photo').length
@@ -565,6 +588,8 @@ function App() {
           ? 'Utilities'
           : libraryView === 'people'
             ? 'People'
+            : libraryView === 'explore'
+              ? 'Explore'
           : libraryView === 'album'
             ? albums.find((album) => album.id === activeAlbumId)?.name ?? 'Album'
             : filter === 'video' ? 'Videos' : filter === 'photo' ? 'Photos' : 'Your photos'
@@ -644,6 +669,9 @@ function App() {
           <button className={libraryView === 'trash' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('trash')}>
             <Trash2 size={18} /><span>Trash</span>
           </button>
+          <button className={libraryView === 'explore' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('explore')}>
+            <Compass size={18} /><span>Explore</span>
+          </button>
           <button className={libraryView === 'people' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('people')}>
             <ScanFace size={18} /><span>People</span>
           </button>
@@ -709,7 +737,15 @@ function App() {
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your library" />
               <kbd>⌘ K</kbd>
             </label>
-            <button className="icon-button header-tool" type="button" aria-label="Library filters"><SlidersHorizontal size={17} /></button>
+            <button
+              className={filtersOpen ? 'icon-button header-tool active' : 'icon-button header-tool'}
+              type="button"
+              aria-label="Library filters"
+              aria-expanded={filtersOpen}
+              onClick={() => setFiltersOpen((open) => !open)}
+            >
+              <SlidersHorizontal size={17} />
+            </button>
             <button className="upload-button" type="button" onClick={() => fileInputRef.current?.click()}>
               <Upload size={17} />
               <span>Add photos & videos</span>
@@ -717,6 +753,87 @@ function App() {
             <input ref={fileInputRef} className="hidden-input" type="file" accept="image/*,video/*" multiple onChange={handleFileChange} />
           </div>
         </header>
+
+        {filtersOpen && (
+          <div className="filter-bar">
+            <label className="filter-field">
+              <span>From</span>
+              <input
+                type="date"
+                value={advancedFilters.dateFrom ?? ''}
+                onChange={(event) => setAdvancedFilters((f) => ({ ...f, dateFrom: event.target.value || undefined }))}
+              />
+            </label>
+            <label className="filter-field">
+              <span>To</span>
+              <input
+                type="date"
+                value={advancedFilters.dateTo ?? ''}
+                onChange={(event) => setAdvancedFilters((f) => ({ ...f, dateTo: event.target.value || undefined }))}
+              />
+            </label>
+            <label className="filter-field">
+              <span>Type</span>
+              <select
+                value={advancedFilters.mediaType ?? ''}
+                onChange={(event) => setAdvancedFilters((f) => ({
+                  ...f,
+                  mediaType: (event.target.value || undefined) as 'photo' | 'video' | undefined,
+                }))}
+              >
+                <option value="">Any</option>
+                <option value="photo">Photos</option>
+                <option value="video">Videos</option>
+              </select>
+            </label>
+            <label className="filter-field">
+              <span>People</span>
+              <select
+                value={advancedFilters.hasFaces === undefined ? '' : String(advancedFilters.hasFaces)}
+                onChange={(event) => setAdvancedFilters((f) => ({
+                  ...f,
+                  hasFaces: event.target.value === '' ? undefined : event.target.value === 'true',
+                }))}
+              >
+                <option value="">Any</option>
+                <option value="true">Has faces</option>
+                <option value="false">No faces</option>
+              </select>
+            </label>
+            <label className="filter-field">
+              <span>Location</span>
+              <select
+                value={advancedFilters.hasLocation === undefined ? '' : String(advancedFilters.hasLocation)}
+                onChange={(event) => setAdvancedFilters((f) => ({
+                  ...f,
+                  hasLocation: event.target.value === '' ? undefined : event.target.value === 'true',
+                }))}
+              >
+                <option value="">Any</option>
+                <option value="true">Has location</option>
+                <option value="false">No location</option>
+              </select>
+            </label>
+            <label className="filter-field">
+              <span>Order</span>
+              <select
+                value={advancedFilters.sort ?? 'newest'}
+                onChange={(event) => setAdvancedFilters((f) => ({ ...f, sort: event.target.value as 'newest' | 'oldest' }))}
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className="ghost-button filter-clear"
+              onClick={() => setAdvancedFilters({})}
+              disabled={Object.keys(advancedFilters).length === 0}
+            >
+              Clear
+            </button>
+          </div>
+        )}
 
         <div className="content-wrap">
           <section className="library-heading">
@@ -788,6 +905,8 @@ function App() {
               <UtilitiesPage onNotice={setNotice} />
             ) : libraryView === 'people' ? (
               <PeoplePage onNotice={setNotice} onOpenMedia={(item) => setViewingItem(itemFromApi(item))} />
+            ) : libraryView === 'explore' ? (
+              <ExplorePage onNotice={setNotice} onOpenMedia={(item) => setViewingItem(itemFromApi(item))} />
             ) : groupedItems.length > 0 ? groupedItems.map((group) => (
               <section className="date-group" key={dateKey(group.date)}>
                 <div className="date-heading"><h3>{group.label}</h3><span>{group.items.length} {group.items.length === 1 ? 'item' : 'items'}</span></div>

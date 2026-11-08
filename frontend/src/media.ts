@@ -6,6 +6,8 @@ type ExifData = {
   CreateDate?: Date | string
   OffsetTimeOriginal?: string
   OffsetTime?: string
+  latitude?: number
+  longitude?: number
 }
 
 type MediaMetadata = {
@@ -13,6 +15,22 @@ type MediaMetadata = {
   width?: number
   height?: number
   duration?: number
+  latitude?: number
+  longitude?: number
+}
+
+/**
+ * EXIF can report 0,0 for photos with no GPS fix at all, which would drop a pin
+ * in the Gulf of Guinea. Treat an exact zero pair as "unknown" instead.
+ */
+function readCoordinates(exif: ExifData): { latitude?: number; longitude?: number } {
+  const latitude = exif.latitude
+  const longitude = exif.longitude
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') return {}
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return {}
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return {}
+  if (latitude === 0 && longitude === 0) return {}
+  return { latitude, longitude }
 }
 
 function asDate(value: Date | string | undefined, offset?: string): Date | undefined {
@@ -29,23 +47,27 @@ async function readImageMetadata(file: File): Promise<MediaMetadata> {
   let exif: ExifData = {}
 
   try {
-    exif = await exifr.parse(file, ['DateTimeOriginal', 'CreateDate', 'OffsetTimeOriginal', 'OffsetTime'])
+    exif = await exifr.parse(file, [
+      'DateTimeOriginal', 'CreateDate', 'OffsetTimeOriginal', 'OffsetTime',
+      'latitude', 'longitude',
+    ])
   } catch {
     // Some images do not contain readable EXIF data. The file timestamp is used below.
   }
 
   const capturedAt = asDate(exif?.DateTimeOriginal, exif?.OffsetTimeOriginal ?? exif?.OffsetTime)
     ?? asDate(exif?.CreateDate, exif?.OffsetTime)
+  const coordinates = readCoordinates(exif ?? {})
 
   return new Promise((resolve) => {
     const image = new Image()
     image.onload = () => {
       URL.revokeObjectURL(image.src)
-      resolve({ capturedAt, width: image.naturalWidth, height: image.naturalHeight })
+      resolve({ capturedAt, width: image.naturalWidth, height: image.naturalHeight, ...coordinates })
     }
     image.onerror = () => {
       URL.revokeObjectURL(image.src)
-      resolve({ capturedAt })
+      resolve({ capturedAt, ...coordinates })
     }
     image.src = URL.createObjectURL(file)
   })
@@ -95,6 +117,8 @@ export async function createMediaItem(file: File): Promise<MediaItem | undefined
     width: metadata.width,
     height: metadata.height,
     duration: type === 'video' ? metadata.duration : undefined,
+    latitude: metadata.latitude,
+    longitude: metadata.longitude,
     file,
     uploadStatus: 'local',
     isFavorite: false,

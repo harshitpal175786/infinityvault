@@ -6,7 +6,7 @@
 
 **Plan:** `docs/PRD-PHASES.md`
 **Baseline commit:** `d68fac7`
-**Current phase:** Phase 5 (Explore/Map/Memories etc.) next — Phase 4 People UI done
+**Current phase:** Phase 6 (video proxies) next — Phase 5 done
 
 ---
 
@@ -24,6 +24,9 @@
 | 2.4 Auto-backup | ✅ | — | Throttled by change count |
 | 3 Auth (token) | ✅ | — | Bearer token, verified end to end |
 | 4 People UI | ✅ | — | Grid, rename, merge, detail |
+| 5.1 GPS capture | ✅ | — | EXIF → upload → DB + backfill |
+| 5.2 Search filters | ✅ | — | Date, type, faces, location, order |
+| 5.3 Explore | ✅ | — | Memories, Places, Recently added, Duplicates |
 | 3. Identity / auth | ⬜ Not started | — | Deploy gate |
 | 3.1 Token auth | ⬜ | — | |
 | 3.2 Single-user cleanup | ⬜ | — | |
