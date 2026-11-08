@@ -54,6 +54,15 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Local file reconciliation failed")
 
+    # Fold any pre-Phase-3.2 client ids into the single owner id. Without this a
+    # real vault stays split, and the owner's own library looks empty.
+    try:
+        adopted = adopt_orphan_rows()
+        if adopted:
+            logger.info("Adopted %s row(s) from legacy client ids into the owner library", adopted)
+    except Exception:
+        logger.exception("Legacy client id adoption failed")
+
     thumbs = ThumbnailService()
     app.state.thumbnail_service = thumbs
     await thumbs.start()
@@ -307,35 +316,65 @@ def resolve_client_id(client_id: str | None, query_client_id: str | None = None)
        from the rows keeps old data reachable without a migration.
     3. OWNER_CLIENT_ID, for a genuinely empty database.
     """
-    explicit = query_client_id or client_id
-    if explicit:
-        return explicit
-    return _existing_owner_id() or OWNER_CLIENT_ID
+    # A single-owner vault ignores the caller's id entirely. Every browser used
+    # to invent a random UUID and store it in localStorage, so honouring it means
+    # a fresh browser sees an empty library even though the photos exist, and a
+    # cleared cache silently "loses" everything. Phase 3 made the access token
+    # the proof of ownership, so the id carries no authority now.
+    #
+    # Rows are migrated to OWNER_CLIENT_ID on boot by adopt_orphan_rows(), so
+    # there is nothing left to address per-client.
+    return OWNER_CLIENT_ID
 
 
 _owner_cache: str | None = None
 
+# Sentinel used for a caller that sent no id at all. It is never a real library
+# id, so "no id" and "the owner" cannot be confused.
+_UNOWNED_CLIENT_IDS = {"", "owner"}
 
-def _existing_owner_id() -> str | None:
-    """The client id the library is already stored under, if any.
 
-    Cached after the first read: this runs on every request, and the answer only
-    changes when a database is swapped, which does not happen at runtime.
+def adopt_orphan_rows() -> int:
+    """Fold every pre-existing client id into the single owner id.
+
+    This is the Phase 3.2 migration that was documented but never run. It
+    matters because the old design gave *every browser* its own random id, so a
+    real vault ends up split across several of them: the owner's own photos can
+    be invisible simply because they are sitting under a UUID nobody sends any
+    more. Merging them is the whole point of a single-owner library.
+
+    Safe to call on every boot: it is one UPDATE, it touches only rows whose id
+    is not already the owner id, and it cannot lose or duplicate a row because
+    client_id is not part of any primary key. Collisions are impossible because
+    media ids are UUIDs.
     """
-    global _owner_cache
-    if _owner_cache:
-        return _owner_cache
-    try:
-        with db.closing(db.open_db()) as connection:
-            row = connection.execute(
-                "SELECT client_id FROM media_items GROUP BY client_id "
-                "ORDER BY COUNT(*) DESC LIMIT 1"
-            ).fetchone()
-    except Exception:
-        return None
-    if row and row["client_id"]:
-        _owner_cache = row["client_id"]
-    return _owner_cache
+    with db.closing(db.open_db()) as connection:
+        orphans = [
+            row["client_id"]
+            for row in connection.execute(
+                "SELECT DISTINCT client_id FROM media_items WHERE client_id != ?",
+                (OWNER_CLIENT_ID,),
+            ).fetchall()
+        ]
+        if not orphans:
+            return 0
+        placeholders = ",".join("?" * len(orphans))
+        moved = connection.execute(
+            f"UPDATE media_items SET client_id = ? WHERE client_id IN ({placeholders})",
+            [OWNER_CLIENT_ID, *orphans],
+        ).rowcount
+        # Albums, tags and people are per-owner too, and would otherwise stay
+        # stranded on a dead id alongside the photos that were just adopted.
+        for table in ("albums", "tags", "people", "app_settings"):
+            try:
+                connection.execute(
+                    f"UPDATE {table} SET client_id = ? WHERE client_id IN ({placeholders})",
+                    [OWNER_CLIENT_ID, *orphans],
+                )
+            except Exception:
+                pass
+        connection.commit()
+    return moved
 
 
 @app.get("/api/auth/status")

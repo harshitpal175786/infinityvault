@@ -188,16 +188,27 @@ than the original.
 
 ## 3.2 client_id as a server-side constant — **done**
 
-`resolve_client_id()` no longer raises. It resolves, in order: an explicit id
-from the caller, then the id the existing library is actually stored under,
-then `OWNER_CLIENT_ID`.
+`resolve_client_id()` always returns `OWNER_CLIENT_ID`; the caller's id carries
+no authority any more. Phase 3 made the access token the proof of ownership, so
+the id was redundant -- but every browser used to invent a random UUID and store
+it in localStorage, which split a real vault across several ids.
 
-The middle step matters and was a bug caught before shipping: a vault created
-before this change has rows under a browser-generated UUID, and defaulting
-straight to `"owner"` made all 7 seeded photos **invisible** — the library
-looked empty. Reading the id back from the rows keeps old data reachable with
-no migration. Verified: no client id -> 7 items, explicit id -> still honoured,
-and all 18 endpoints answer 200 with no client id at all (previously 400).
+**This was found by running the app, not by reading it.** Three earlier attempts
+were each wrong in a different way:
+
+1. Defaulting an absent id to `"owner"` made pre-existing rows invisible.
+2. Resolving to the id with the most rows fixed that but still let the browser's
+   stored UUID win, so a fresh browser saw **0 of 13** photos.
+3. The correct answer is the migration the PRD asked for in the first place:
+   `adopt_orphan_rows()` folds every legacy id into `owner` on boot.
+
+That boot migration adopted 13 rows from 4 ids in the real database, and the
+library went from 0 visible assets to 13. Rows are only re-pointed, never
+merged or duplicated: `client_id` is not part of any primary key and media ids
+are UUIDs, so the UPDATE cannot collide or lose a row.
+
+Lesson worth keeping: three rounds of "correct-looking" logic were all wrong,
+and only running the actual app against a real database surfaced it.
 
 ## Phase 7 remaining JSX — **partially done, stated honestly**
 
