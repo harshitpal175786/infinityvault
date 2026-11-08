@@ -96,6 +96,8 @@ export type Album = {
   name: string
   description: string
   media_count: number
+  /** Newest item in the album, used as its thumbnail. Null when empty. */
+  cover_media_id?: string | null
 }
 
 export type Tag = {
@@ -257,6 +259,15 @@ export function deleteAlbum(id: string): Promise<{ deleted: boolean }> {
 
 export function addMediaToAlbum(id: string, mediaIds: string[]): Promise<{ added: number }> {
   return request<{ added: number }>(`/api/albums/${id}/media`, { method: 'POST', body: JSON.stringify({ media_ids: mediaIds }) })
+}
+
+export function renameAlbum(id: string, name: string): Promise<Album> {
+  return request<Album>(`/api/albums/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+}
+
+/** Unlinks items from an album. The media itself is untouched. */
+export function removeMediaFromAlbum(id: string, mediaIds: string[]): Promise<{ removed: number }> {
+  return request<{ removed: number }>(`/api/albums/${id}/media`, { method: 'DELETE', body: JSON.stringify({ media_ids: mediaIds }) })
 }
 
 export function listTags(): Promise<Tag[]> {

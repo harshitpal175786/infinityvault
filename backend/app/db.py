@@ -739,10 +739,24 @@ def delete_media(media_id: str, client_id: str) -> str | None:
 
 
 def list_albums(client_id: str) -> list[sqlite3.Row]:
+    """Albums with a count and a cover.
+
+    The cover is the newest item's id rather than a stored column, so it stays
+    correct when items are added or removed and needs no extra migration.
+    """
     with closing(open_db()) as connection:
         return list(connection.execute(
             """
-            SELECT albums.*, COUNT(album_media.media_id) AS media_count
+            SELECT albums.*,
+                   COUNT(album_media.media_id) AS media_count,
+                   (
+                       SELECT album_media.media_id
+                       FROM album_media
+                       JOIN media_items ON media_items.id = album_media.media_id
+                       WHERE album_media.album_id = albums.id
+                       ORDER BY media_items.capture_time DESC, media_items.created_at DESC
+                       LIMIT 1
+                   ) AS cover_media_id
             FROM albums LEFT JOIN album_media ON album_media.album_id = albums.id
             WHERE albums.client_id = ?
             GROUP BY albums.id ORDER BY albums.created_at DESC
@@ -790,6 +804,70 @@ def add_media_to_album(album_id: str, media_ids: list[str], client_id: str) -> i
         connection.commit()
     mark_library_changed(client_id)
     return len(valid_ids)
+
+
+def remove_media_from_album(album_id: str, media_ids: list[str], client_id: str) -> int:
+    """Unlink items from an album without touching the media itself.
+
+    Returns -1 for a missing album so the route can 404; an empty result is a
+    legitimate "nothing was linked", not an error.
+    """
+    with closing(open_db()) as connection:
+        album = connection.execute(
+            "SELECT id FROM albums WHERE id = ? AND client_id = ?", (album_id, client_id)
+        ).fetchone()
+        if not album:
+            return -1
+        if not media_ids:
+            return 0
+        placeholders = ",".join("?" for _ in media_ids)
+        cursor = connection.execute(
+            f"DELETE FROM album_media WHERE album_id = ? AND media_id IN ({placeholders})",
+            [album_id, *media_ids],
+        )
+        removed = cursor.rowcount
+        connection.commit()
+    mark_library_changed(client_id)
+    return max(0, removed)
+
+
+def update_album(album_id: str, client_id: str, name: str | None = None, description: str | None = None) -> sqlite3.Row | None:
+    """Rename or re-describe an album. Absent fields are left alone."""
+    with closing(open_db()) as connection:
+        existing = connection.execute(
+            "SELECT id FROM albums WHERE id = ? AND client_id = ?", (album_id, client_id)
+        ).fetchone()
+        if not existing:
+            return None
+        sets: list[str] = []
+        params: list = []
+        if name is not None:
+            cleaned = name.strip()
+            if not cleaned:
+                raise ValueError("An album needs a name")
+            sets.append("name = ?")
+            params.append(cleaned[:200])
+        if description is not None:
+            sets.append("description = ?")
+            params.append(description.strip()[:2000])
+        if sets:
+            sets.append("updated_at = ?")
+            params.append(utc_now())
+            params.extend([album_id, client_id])
+            connection.execute(
+                f"UPDATE albums SET {', '.join(sets)} WHERE id = ? AND client_id = ?", params
+            )
+            connection.commit()
+        row = connection.execute(
+            """
+            SELECT albums.*, COUNT(album_media.media_id) AS media_count
+            FROM albums LEFT JOIN album_media ON album_media.album_id = albums.id
+            WHERE albums.id = ? GROUP BY albums.id
+            """,
+            (album_id,),
+        ).fetchone()
+    mark_library_changed(client_id)
+    return row
 
 
 def list_tags(client_id: str) -> list[sqlite3.Row]:

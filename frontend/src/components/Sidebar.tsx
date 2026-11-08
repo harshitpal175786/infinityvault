@@ -30,6 +30,7 @@ type SidebarProps = {
   setFilter: (filter: 'all' | 'photo' | 'video') => void
   onOpenTelegram: () => void
   onCreateAlbum: () => void
+  onOpenAlbums: () => void
   onSetDrawerOpen: (open: boolean) => void
   onToggleCollapse: () => void
   theme: 'light' | 'dark'
@@ -50,6 +51,7 @@ export function Sidebar({
   setFilter,
   onOpenTelegram,
   onCreateAlbum,
+  onOpenAlbums,
   onSetDrawerOpen,
   onToggleCollapse,
   theme,
@@ -69,10 +71,14 @@ export function Sidebar({
             <span>Photos</span>
             <span className="nav-count">{items.length}</span>
           </button>
-          <button className={libraryView === 'album' ? 'nav-item active' : 'nav-item'} type="button" onClick={onCreateAlbum}>
+          <button
+            className={libraryView === 'albums' || libraryView === 'album' ? 'nav-item active' : 'nav-item'}
+            type="button"
+            onClick={onOpenAlbums}
+          >
             <Archive size={18} />
             <span>Albums</span>
-            <Plus size={14} className="nav-count" />
+            <span className="nav-count">{albums.length}</span>
           </button>
           {albums.map((album) => <button className={libraryView === 'album' && activeAlbumId === album.id ? 'nav-item nested active' : 'nav-item nested'} type="button" key={album.id} onClick={() => openView('album', album.id)}><Folder size={16} /><span>{album.name}</span><span className="nav-count">{album.media_count}</span></button>)}
           <button className={libraryView === 'favorites' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('favorites')}>

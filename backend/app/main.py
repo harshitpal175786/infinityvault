@@ -164,6 +164,11 @@ class AlbumCreate(BaseModel):
     description: str = ""
 
 
+class AlbumUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
 class MediaSelection(BaseModel):
     media_ids: list[str]
 
@@ -713,6 +718,36 @@ def add_album_media(
     if added < 0:
         raise HTTPException(status_code=404, detail="Album not found")
     return {"added": added}
+
+
+@app.patch("/api/albums/{album_id}")
+def patch_album(
+    album_id: str,
+    payload: AlbumUpdate,
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+) -> dict:
+    client_id = resolve_client_id(client_id)
+    try:
+        row = db.update_album(album_id, client_id, payload.name, payload.description)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if row is None:
+        raise HTTPException(status_code=404, detail="Album not found")
+    return dict(row)
+
+
+@app.delete("/api/albums/{album_id}/media")
+def delete_album_media(
+    album_id: str,
+    payload: MediaSelection,
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+) -> dict[str, int]:
+    """Remove items from an album. The media rows themselves are untouched."""
+    client_id = resolve_client_id(client_id)
+    removed = db.remove_media_from_album(album_id, payload.media_ids, client_id)
+    if removed < 0:
+        raise HTTPException(status_code=404, detail="Album not found")
+    return {"removed": removed}
 
 
 @app.get("/api/tags")

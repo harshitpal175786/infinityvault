@@ -21,6 +21,7 @@ export type LibraryView =
   | 'archive'
   | 'trash'
   | 'album'
+  | 'albums'
   | 'utilities'
   | 'people'
   | 'explore'

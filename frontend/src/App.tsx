@@ -49,9 +49,10 @@ import { useLibraryFilters, FILTERS, type Filter, type LibraryView } from './hoo
 import { useInfiniteScroll } from './hooks/useInfiniteScroll'
 import { useToast } from './components/Toast'
 import { ContextMenu, type MenuAction } from './components/ContextMenu'
+import { AlbumsPage } from './components/AlbumsPage'
 import { SkeletonGrid } from './components/Spinner'
 import { dateKey, formatDateHeading, formatDuration, formatSize, formatTime, itemFromApi, statusLabel } from './lib/format'
-import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listCameras, listMedia, listMediaPage, listPeople, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
+import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteAlbum, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listCameras, listMedia, listMediaPage, listPeople, listTags, mediaUrl, removeMediaFromAlbum, renameAlbum, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
 import type { Album, ApiMedia, CameraOption, MediaFilterParams, Tag, TelegramAuthResponse, TelegramStatus } from './api'
 import type { MediaItem, MediaType, UploadStatus } from './types'
 
@@ -495,6 +496,43 @@ function App() {
     })
   }
 
+  async function handleCreateAlbum(name: string) {
+    const album = await createAlbum(name)
+    setAlbums((current) => [album, ...current])
+    notify(`“${name}” created.`)
+  }
+
+  async function handleRenameAlbum(album: Album, name: string) {
+    const saved = await renameAlbum(album.id, name)
+    setAlbums((current) => current.map((each) => each.id === album.id ? saved : each))
+    notify(`Renamed to “${saved.name}”.`)
+  }
+
+  async function handleDeleteAlbum(album: Album) {
+    await deleteAlbum(album.id)
+    setAlbums((current) => current.filter((each) => each.id !== album.id))
+    // The open album is gone, so fall back to the whole library rather than
+    // leaving the user on a view that no longer exists.
+    if (activeAlbumId === album.id) {
+      setActiveAlbumId(undefined)
+      setLibraryView('library')
+    }
+    notify(`“${album.name}” deleted. Its items are still in your library.`)
+  }
+
+  async function handleRemoveFromAlbum() {
+    if (!activeAlbumId || selectedIds.size === 0) return
+    const count = selectedIds.size
+    try {
+      await removeMediaFromAlbum(activeAlbumId, Array.from(selectedIds))
+      clearSelection()
+      await refreshLibrary(false)
+      notify(`Removed ${count} ${count === 1 ? 'item' : 'items'} from the album.`)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not remove those items.')
+    }
+  }
+
   async function createNewAlbum() {
     const name = window.prompt('Album name')?.trim()
     if (!name) return
@@ -702,6 +740,7 @@ function App() {
         setFilter={setFilter}
         onOpenTelegram={() => setIsTelegramOpen(true)}
         onCreateAlbum={() => void createNewAlbum()}
+        onOpenAlbums={() => { setLibraryView('albums'); setActiveAlbumId(undefined) }}
         onSetDrawerOpen={setDrawerOpen}
         onToggleCollapse={toggleSidebar}
         theme={theme}
@@ -930,6 +969,11 @@ function App() {
                   </>
                 )}
                 <button type="button" onClick={addSelectionToAlbum}><Folder size={14} /> Album</button>
+                {/* Only meaningful inside an album: unlinks the items without
+                    touching the media itself. */}
+                {libraryView === 'album' && activeAlbumId && (
+                  <button type="button" onClick={() => void handleRemoveFromAlbum()}><X size={14} /> Remove</button>
+                )}
                 <button type="button" onClick={addSelectionTag}><TagIcon size={14} /> Tag</button>
                 <button type="button" onClick={downloadSelected} disabled={!selectedItems.some((item) => item.downloadUrl)}><Download size={14} /> Download</button>
                 {libraryView === 'trash' && (
@@ -950,7 +994,16 @@ function App() {
           )}
 
           <div className={isDragging ? 'drop-zone dragging' : 'drop-zone'} onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop}>
-            {libraryView === 'utilities' ? (
+            {libraryView === 'albums' ? (
+              <AlbumsPage
+                albums={albums}
+                onOpen={(album) => { setActiveAlbumId(album.id); setLibraryView('album'); setSelectedIds(new Set()) }}
+                onCreate={handleCreateAlbum}
+                onRename={handleRenameAlbum}
+                onDelete={handleDeleteAlbum}
+                onNotice={notify}
+              />
+            ) : libraryView === 'utilities' ? (
               <UtilitiesPage onNotice={setNotice} />
             ) : libraryView === 'people' ? (
               <PeoplePage onNotice={setNotice} onOpenMedia={(item) => setViewingItem(itemFromApi(item, mediaUrl))} />
