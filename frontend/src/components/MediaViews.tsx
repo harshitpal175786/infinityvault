@@ -39,7 +39,18 @@ import {
   statusLabel,
 } from '../lib/format'
 
-export function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView, onFavorite, onEdit }: { item: MediaItem; selected: boolean; onSelect: () => void; onRetry: (item: MediaItem) => void; onConnect: () => void; onView: (item: MediaItem) => void; onFavorite: () => void; onEdit: () => void }) {
+export function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView, onFavorite, onEdit, onContextMenu }: {
+  item: MediaItem
+  selected: boolean
+  /** Receives the event so shift-click ranges and plain clicks can differ. */
+  onSelect: (event: React.MouseEvent) => void
+  onRetry: (item: MediaItem) => void
+  onConnect: () => void
+  onView: (item: MediaItem) => void
+  onFavorite: () => void
+  onEdit: () => void
+  onContextMenu: (event: React.MouseEvent) => void
+}) {
   const statusIcon = item.uploadStatus === 'uploaded'
     ? <Check size={11} />
     : item.uploadStatus === 'failed'
@@ -57,19 +68,25 @@ export function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView
   const [loaded, setLoaded] = useState(false)
 
   return (
-    <article className={selected ? 'media-card selected' : 'media-card'} data-id={item.id}>
+    <article
+      className={selected ? 'media-card selected' : 'media-card'}
+      data-id={item.id}
+      onContextMenu={onContextMenu}
+    >
       <div
         className={`media-preview${loaded ? ' loaded' : ''}`}
         style={item.microUrl && !previewFailed ? { backgroundImage: `url(${item.microUrl})` } : undefined}
         role="button"
         tabIndex={0}
         aria-label={`Open ${item.name}`}
-        onClick={() => (canView ? onView(item) : onSelect())}
+        onClick={(event) => (canView ? onView(item) : onSelect(event))}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
+            // A keyboard activation has no pointer position, so it is always a
+            // plain toggle rather than a shift range.
             if (canView) onView(item)
-            else onSelect()
+            else onSelect(event as unknown as React.MouseEvent)
           }
         }}
       >
@@ -93,7 +110,7 @@ export function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView
           className={selected ? 'select-button selected' : 'select-button'}
           type="button"
           aria-label={selected ? `Deselect ${item.name}` : `Select ${item.name}`}
-          onClick={(event) => { event.stopPropagation(); onSelect() }}
+          onClick={(event) => { event.stopPropagation(); onSelect(event) }}
         >
           {selected && <Check size={12} strokeWidth={3} />}
         </button>

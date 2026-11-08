@@ -48,6 +48,8 @@ import { EmptyState, MediaCard, MediaDetailsModal, MediaViewer, TelegramModal } 
 import { useLibraryFilters, FILTERS, type Filter, type LibraryView } from './hooks/useLibraryFilters'
 import { useInfiniteScroll } from './hooks/useInfiniteScroll'
 import { useToast } from './components/Toast'
+import { ContextMenu, type MenuAction } from './components/ContextMenu'
+import { SkeletonGrid } from './components/Spinner'
 import { dateKey, formatDateHeading, formatDuration, formatSize, formatTime, itemFromApi, statusLabel } from './lib/format'
 import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listCameras, listMedia, listMediaPage, listPeople, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
 import type { Album, ApiMedia, CameraOption, MediaFilterParams, Tag, TelegramAuthResponse, TelegramStatus } from './api'
@@ -102,6 +104,10 @@ function App() {
   // Kept as a single helper so the ~20 existing call sites do not change, but
   // messages now go through the toast queue: they stack instead of overwriting
   // each other, and errors are announced assertively to screen readers.
+  // Anchor for shift-click range selection.
+  const lastSelectedRef = useRef<string | null>(null)
+  // Open context menu: which item, and where.
+  const [menu, setMenu] = useState<{ item: MediaItem; x: number; y: number } | null>(null)
   const toast = useToast()
   const [notice, setNotice] = useState('')
 
@@ -126,6 +132,10 @@ function App() {
   // newest photos live); later pages are appended only when the user asks.
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  // True only until the first page resolves. Without it the timeline painted a
+  // blank area on load, which is indistinguishable from an empty library.
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   // 1 = only the first page is loaded. Guards the cursor from being rewound by
   // the 2s poll once the user has appended more.
   const loadedPagesRef = useRef(1)
@@ -166,7 +176,40 @@ function App() {
     loading: loadingMore,
   })
 
+  // Actions for the right-click menu. Each one calls a handler that already
+  // exists; the menu adds reach, not behaviour.
+  function menuActions(item: MediaItem): MenuAction[] {
+    const canView = item.uploadStatus === 'uploaded' && Boolean(item.telegramUrl)
+    return [
+      { label: 'Open', onSelect: () => setViewingItem(item), disabled: !canView },
+      { label: 'Details', onSelect: () => setEditingItem(item) },
+      {
+        label: item.isFavorite ? 'Remove from favourites' : 'Add to favourites',
+        onSelect: () => void toggleFavorite(item),
+      },
+      {
+        label: selectedIds.has(item.id) ? 'Deselect' : 'Select',
+        onSelect: () => toggleSelected(item.id),
+      },
+      {
+        label: 'Copy name',
+        separated: true,
+        onSelect: () => {
+          void navigator.clipboard?.writeText(item.name).then(
+            () => notify(`Copied “${item.name}”.`),
+            () => notify('The clipboard is not available.'),
+          )
+        },
+      },
+      {
+        label: item.uploadStatus === 'failed' ? 'Retry upload' : 'Re-upload',
+        onSelect: () => handleRetry(item),
+      },
+    ]
+  }
+
   async function refreshLibrary(showError = true) {
+    setLoadError('')
     const seq = ++requestSeq.current
     try {
       const mediaView = libraryView === 'album' ? 'library' : libraryView
@@ -222,10 +265,15 @@ function App() {
       setTags(savedTags)
       setCameras(savedCameras)
       setPeople(savedPeople)
+      setLoadError('')
     } catch (error) {
-      if (showError && seq === requestSeq.current) {
-        notify(error instanceof Error ? error.message : 'The local service is not available yet.')
-      }
+      const message = error instanceof Error ? error.message : 'The local service is not available yet.'
+      // A failed first load must leave something actionable on screen, not a
+      // blank timeline that looks like an empty library.
+      if (seq === requestSeq.current) setLoadError(message)
+      if (showError && seq === requestSeq.current) notify(message)
+    } finally {
+      if (seq === requestSeq.current) setInitialLoading(false)
     }
   }
 
@@ -538,6 +586,35 @@ function App() {
       else next.add(id)
       return next
     })
+    lastSelectedRef.current = id
+  }
+
+  // Shift-click selects everything between the last click and this one, which
+  // is how every file browser behaves and is the fastest way to pick a range
+  // out of a 378-item timeline. Alt/Meta-click is treated the same as a plain
+  // click so additive selection still works.
+  function selectWithRange(id: string, event: React.MouseEvent) {
+    const anchor = lastSelectedRef.current
+    if (!event.shiftKey || !anchor || anchor === id) {
+      toggleSelected(id)
+      return
+    }
+    // Range is taken in display order, not insertion order.
+    const ids = filteredItems.map((item) => item.id)
+    const from = ids.indexOf(anchor)
+    const to = ids.indexOf(id)
+    if (from === -1 || to === -1) {
+      toggleSelected(id)
+      return
+    }
+    const [start, end] = from <= to ? [from, to] : [to, from]
+    const range = ids.slice(start, end + 1)
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      range.forEach((each) => next.add(each))
+      return next
+    })
+    lastSelectedRef.current = id
   }
 
   function clearSelection() {
@@ -874,11 +951,22 @@ function App() {
               <PeoplePage onNotice={setNotice} onOpenMedia={(item) => setViewingItem(itemFromApi(item, mediaUrl))} />
             ) : libraryView === 'explore' ? (
               <ExplorePage onNotice={setNotice} onOpenMedia={(item) => setViewingItem(itemFromApi(item, mediaUrl))} />
+            ) : initialLoading ? (
+              <SkeletonGrid />
+            ) : loadError ? (
+              <div className="grid-error" role="alert">
+                <AlertCircle size={22} />
+                <h3>The library could not be loaded</h3>
+                <p>{loadError}</p>
+                <button type="button" className="btn btn--secondary" onClick={() => { setInitialLoading(true); void refreshLibrary() }}>
+                  Try again
+                </button>
+              </div>
             ) : groupedItems.length > 0 ? groupedItems.map((group) => (
               <section className="date-group" key={dateKey(group.date)}>
                 <div className="date-heading"><h3>{group.label}</h3><span>{group.items.length} {group.items.length === 1 ? 'item' : 'items'}</span></div>
                 <div className="media-grid">
-                  {group.items.map((item) => <MediaCard key={item.id} item={item} selected={selectedIds.has(item.id)} onSelect={() => toggleSelected(item.id)} onRetry={handleRetry} onConnect={() => setIsTelegramOpen(true)} onView={setViewingItem} onFavorite={() => void toggleFavorite(item)} onEdit={() => setEditingItem(item)} />)}
+                  {group.items.map((item) => <MediaCard key={item.id} item={item} selected={selectedIds.has(item.id)} onSelect={(event) => selectWithRange(item.id, event)} onRetry={handleRetry} onConnect={() => setIsTelegramOpen(true)} onView={setViewingItem} onFavorite={() => void toggleFavorite(item)} onEdit={() => setEditingItem(item)} onContextMenu={(event) => { event.preventDefault(); setMenu({ item, x: event.clientX, y: event.clientY }) }} />)}
                 </div>
               </section>
             )) : (
@@ -898,6 +986,14 @@ function App() {
         </div>
       </main>
 
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          actions={menuActions(menu.item)}
+          onClose={() => setMenu(null)}
+        />
+      )}
       {isTelegramOpen && <TelegramModal status={telegramStatus} onConnected={handleTelegramConnected} onDisconnected={handleTelegramDisconnected} onClose={() => setIsTelegramOpen(false)} />}
       {editingItem && <MediaDetailsModal item={editingItem} onSave={saveDetails} onClose={() => setEditingItem(null)} />}
       {viewingItem && <MediaViewer item={viewingItem} items={filteredItems} onChange={setViewingItem} onClose={() => setViewingItem(null)} />}

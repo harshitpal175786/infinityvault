@@ -537,3 +537,45 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* --- Skeleton grid + load error -----------------------------------------
+   The skeleton uses the real grid's sizing variables so the swap to content
+   causes no layout shift. */
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile-target), 1fr));
+  gap: var(--gap-media);
+}
+
+.grid-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 56px 20px;
+  text-align: center;
+  color: var(--on-surface-variant);
+}
+
+.grid-error svg {
+  color: var(--danger);
+}
+
+.grid-error h3 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--on-surface);
+}
+
+.grid-error p {
+  margin: 0;
+  max-width: 42ch;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.grid-error .btn {
+  margin-top: 6px;
+}

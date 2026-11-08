@@ -39,3 +39,25 @@ export function Skeleton({ variant = 'block', width, height, className = '' }: S
     .join(' ')
   return <span className={classes} style={{ width, height }} aria-hidden="true" />
 }
+
+interface SkeletonGridProps {
+  /** Roughly one screenful of tiles. */
+  count?: number
+}
+
+/**
+ * First-load placeholder for the timeline.
+ *
+ * Matches the real grid's tile size and gap so the layout does not shift when
+ * data arrives — a blank area that becomes a grid is exactly the kind of jump
+ * the Phase 2 criteria forbid.
+ */
+export function SkeletonGrid({ count = 24 }: SkeletonGridProps) {
+  return (
+    <div className="skeleton-grid" aria-hidden="true">
+      {Array.from({ length: count }, (_, index) => (
+        <Skeleton key={index} variant="tile" />
+      ))}
+    </div>
+  )
+}
