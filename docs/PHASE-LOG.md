@@ -6,7 +6,7 @@
 
 **Plan:** `docs/PRD-PHASES.md`
 **Baseline commit:** `d68fac7`
-**Current phase:** Phase 2.2 (integrity check) next — 2.1 complete
+**Current phase:** Phase 3 (identity/auth) next — Phase 2 complete
 
 ---
 
@@ -17,9 +17,9 @@
 | 1. Trust the library | ✅ Done | — | 1.1 + 1.2 verified |
 | 1.1 `local_path` reconciliation | ✅ | — | Verified on real DB |
 | 1.2 Pagination | ✅ | — | Verified in browser |
-| 2. Telegram cold store | 🟡 In progress | — | Thumbnails done |
+| 2. Telegram cold store | ✅ Done | — | 2.1 + 2.2 verified |
 | 2.1 Thumbnails | ✅ | — | Grid never fetches originals |
-| 2.2 Integrity check | ⬜ | — | |
+| 2.2 Integrity check | ✅ | — | Utilities page |
 | 3. Identity / auth | ⬜ Not started | — | Deploy gate |
 | 3.1 Token auth | ⬜ | — | |
 | 3.2 Single-user cleanup | ⬜ | — | |
@@ -157,11 +157,38 @@ _Log:_
 
 ### 2.2 Integrity check
 
-- [ ] `POST /api/integrity/check` verifies Telegram message existence
-- [ ] Results write to `file_state`
-- [ ] UI surfaces count; limitation documented in the UI itself
+- [x] `POST /api/integrity/check` verifies Telegram message existence
+- [x] Results written to a dedicated `integrity_state` (+ timestamp), not
+      `file_state` — the two answer different questions (local file vs remote
+      original) and conflating them would make one overwrite the other
+- [x] Handles the subtle case: message exists but its media was stripped
+- [x] Batched lookups (100 per round trip) so a big library stays fast
+- [x] UI surfaces counts and the broken list; limitation stated in the UI
 
-_Log:_ (empty)
+_Log:_
+- 2026-02-14 — Implemented `check_integrity()` on `TelegramService`.
+  Reuses one metadata lookup per batch rather than downloading anything.
+- Verified with a mocked client over 5 rows: 2 ok, 3 missing, correctly
+  including a message that survived with `media=None`.
+- Verified batching across 250 rows (batches 100/100/50): exactly 225 ok /
+  25 missing with every 10th message deleted.
+- Verified endpoints: `/check` without Telegram → 409 with an actionable
+  message; `/status` and `/broken` return correct shapes.
+- Verified in Chromium: Utilities page renders 2 Present / 3 Missing /
+  0 unchecked, lists the 3 broken items, "Checked 1m ago" meta, zero console
+  errors. Clicking "Check library" with Telegram disconnected shows
+  "Reconnect Telegram before checking your library" and the button does not
+  get stuck in its loading state.
+- **Design note:** not reusing `file_state`. `file_state` is about the local
+  copy; `integrity_state` is about the Telegram original. A row can legitimately
+  be `present` locally and `missing` in Telegram, and vice versa.
+- **Token gap found:** the new page referenced `--primary-soft`,
+  `--danger-soft` and `--surface-variant`, which did not exist. Added the two
+  soft tokens to both themes and switched to the existing `--surface-2` rather
+  than introducing a literal colour or a duplicate token.
+- Utilities layout changed from a hard `max-width: 780px` to
+  `width: min(100%, 1100px)` so it fills the content area instead of leaving a
+  large empty region on wide screens.
 
 ---
 

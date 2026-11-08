@@ -198,6 +198,8 @@ def init_db() -> None:
             "longitude": "ALTER TABLE media_items ADD COLUMN longitude REAL",
             "file_state": "ALTER TABLE media_items ADD COLUMN file_state TEXT NOT NULL DEFAULT 'present'",
             "thumb_state": "ALTER TABLE media_items ADD COLUMN thumb_state TEXT NOT NULL DEFAULT 'pending'",
+            "integrity_state": "ALTER TABLE media_items ADD COLUMN integrity_state TEXT",
+            "integrity_checked_at": "ALTER TABLE media_items ADD COLUMN integrity_checked_at TEXT",
         }
         for column, statement in migrations.items():
             if column not in columns:
@@ -747,6 +749,9 @@ def row_to_media(row: sqlite3.Row, api_prefix: str = "/api") -> dict[str, Any]:
         # pending | running | ready | failed — "ready" means preview_url is a
         # real cached thumbnail rather than the full original.
         "thumb_state": row["thumb_state"],
+        # None until an integrity check has run for this asset.
+        "integrity_state": row["integrity_state"],
+        "integrity_checked_at": row["integrity_checked_at"],
     }
 
 
@@ -1271,3 +1276,65 @@ def thumbnail_job_stats(client_id: str) -> dict[str, int]:
     for row in rows:
         stats[row["thumb_state"]] = row["n"]
     return stats
+
+
+# ---------------------------------------------------------------------------
+# Integrity
+#
+# Immich verifies a local file still matches its checksum. There is no local
+# file to checksum here -- the original lives in Telegram -- so the equivalent
+# question is "does the Telegram message still exist?". That is a metadata
+# lookup, not a download, so it is cheap enough to run over a whole library.
+#
+# This deliberately proves EXISTENCE, not byte-equality. A byte comparison
+# would mean re-downloading every original, which defeats the point of
+# keeping Telegram as a cold store.
+# ---------------------------------------------------------------------------
+
+def list_media_for_integrity(client_id: str) -> list[sqlite3.Row]:
+    """Rows that claim to be in Telegram, newest first."""
+    with closing(open_db()) as connection:
+        return connection.execute(
+            "SELECT id, original_name, telegram_message_id, upload_status "
+            "FROM media_items WHERE client_id = ? AND telegram_message_id IS NOT NULL "
+            "ORDER BY capture_time DESC",
+            (client_id,),
+        ).fetchall()
+
+
+def set_integrity_state(media_id: str, state: str) -> None:
+    now = utc_now()
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE media_items SET integrity_state = ?, integrity_checked_at = ? WHERE id = ?",
+            (state, now, media_id),
+        )
+        connection.commit()
+
+
+def integrity_summary(client_id: str) -> dict[str, Any]:
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            "SELECT integrity_state, COUNT(*) AS n FROM media_items "
+            "WHERE client_id = ? AND telegram_message_id IS NOT NULL "
+            "GROUP BY integrity_state",
+            (client_id,),
+        ).fetchall()
+        last = connection.execute(
+            "SELECT MAX(integrity_checked_at) AS t FROM media_items WHERE client_id = ?",
+            (client_id,),
+        ).fetchone()
+    summary: dict[str, Any] = {"ok": 0, "missing": 0, "unchecked": 0, "last_checked_at": last["t"]}
+    for row in rows:
+        key = row["integrity_state"] or "unchecked"
+        summary[key] = row["n"]
+    return summary
+
+
+def list_broken_media(client_id: str) -> list[sqlite3.Row]:
+    with closing(open_db()) as connection:
+        return list(connection.execute(
+            "SELECT * FROM media_items WHERE client_id = ? AND integrity_state = 'missing' "
+            "ORDER BY capture_time DESC",
+            (client_id,),
+        ).fetchall())

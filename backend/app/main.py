@@ -659,6 +659,30 @@ def merge_people(payload: PersonMerge, client_id: str = Header(default="local-us
     return {"merged_faces": moved}
 
 
+@app.post("/api/integrity/check")
+async def integrity_check(
+    request: Request,
+    limit: int = Query(default=500, ge=1, le=5000),
+    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+) -> dict:
+    """Verify that backed-up originals still exist in Telegram."""
+    try:
+        return await telegram_service(request).check_integrity(client_id, limit=limit)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.get("/api/integrity/status")
+def integrity_status(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+    return db.integrity_summary(client_id)
+
+
+@app.get("/api/integrity/broken")
+def integrity_broken(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> list[dict]:
+    """Assets whose Telegram original is gone, so the UI can offer a re-upload."""
+    return [db.row_to_media(row) for row in db.list_broken_media(client_id)]
+
+
 @app.get("/api/faces/{face_id}/thumbnail")
 def face_thumbnail(face_id: str, client_id: str = Header(default="local-user", alias="X-Client-ID")):
     """Crop a single face from its original for the People grid."""

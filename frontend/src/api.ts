@@ -208,3 +208,22 @@ export function createTag(name: string): Promise<Tag> {
 export function addTagToMedia(id: string, mediaIds: string[]): Promise<{ added: number }> {
   return request<{ added: number }>(`/api/tags/${id}/media`, { method: 'POST', body: JSON.stringify({ media_ids: mediaIds }) })
 }
+
+export interface IntegritySummary {
+  ok: number
+  missing: number
+  unchecked: number
+  last_checked_at: string | null
+}
+
+export function getIntegrityStatus(): Promise<IntegritySummary> {
+  return request<IntegritySummary>('/api/integrity/status')
+}
+
+export function checkIntegrity(limit = 500): Promise<IntegritySummary & { total: number }> {
+  return request(`/api/integrity/check?limit=${limit}`, { method: 'POST' })
+}
+
+export function listBrokenMedia(): Promise<ApiMedia[]> {
+  return request<ApiMedia[]>('/api/integrity/broken')
+}

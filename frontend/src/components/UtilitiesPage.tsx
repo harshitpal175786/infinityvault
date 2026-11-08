@@ -1,0 +1,131 @@
+import { useCallback, useEffect, useState } from 'react'
+import { AlertCircle, CheckCircle2, HardDrive, RefreshCw, ShieldCheck } from 'lucide-react'
+import { checkIntegrity, getIntegrityStatus, listBrokenMedia } from '../api'
+import type { ApiMedia, IntegritySummary } from '../api'
+
+function formatChecked(value: string | null): string {
+  if (!value) return 'Never checked'
+  const when = new Date(value)
+  const minutes = Math.max(0, Math.round((Date.now() - when.getTime()) / 60000))
+  if (minutes < 1) return 'Checked just now'
+  if (minutes < 60) return `Checked ${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `Checked ${hours}h ago`
+  return `Checked ${Math.round(hours / 24)}d ago`
+}
+
+/**
+ * Utilities: library health.
+ *
+ * The integrity check proves that each backed-up original still exists in
+ * Telegram. It does NOT verify byte-for-byte equality, because that would
+ * require re-downloading every file. The copy here says so plainly rather
+ * than implying a stronger guarantee than we can make.
+ */
+export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => void }) {
+  const [summary, setSummary] = useState<IntegritySummary | null>(null)
+  const [broken, setBroken] = useState<ApiMedia[]>([])
+  const [running, setRunning] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const [nextSummary, nextBroken] = await Promise.all([getIntegrityStatus(), listBrokenMedia()])
+      setSummary(nextSummary)
+      setBroken(nextBroken)
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'Could not read library health.')
+    }
+  }, [onNotice])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  async function runCheck() {
+    setRunning(true)
+    try {
+      const result = await checkIntegrity()
+      setSummary(result)
+      setBroken(await listBrokenMedia())
+      onNotice(
+        result.missing
+          ? `${result.missing} ${result.missing === 1 ? 'original is' : 'originals are'} missing from Telegram.`
+          : `All ${result.ok} originals are present in Telegram.`,
+      )
+    } catch (error) {
+      // The usual cause is Telegram not being connected, which the server
+      // reports with an actionable message.
+      onNotice(error instanceof Error ? error.message : 'The check could not run.')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const total = summary ? summary.ok + summary.missing + summary.unchecked : 0
+
+  return (
+    <div className="utilities-page">
+      <section className="utility-card">
+        <div className="utility-card-head">
+          <span className="utility-icon"><ShieldCheck size={18} /></span>
+          <div>
+            <h3>Library integrity</h3>
+            <p className="utility-sub">
+              Confirms each backed-up original still exists in Telegram. This checks presence,
+              not a byte-for-byte comparison — originals stay in Telegram and are never
+              re-downloaded for verification.
+            </p>
+          </div>
+        </div>
+
+        <div className="utility-stats">
+          <div className="utility-stat">
+            <span className="utility-stat-value">{summary?.ok ?? 0}</span>
+            <span className="utility-stat-label"><CheckCircle2 size={13} /> Present</span>
+          </div>
+          <div className={summary?.missing ? 'utility-stat danger' : 'utility-stat'}>
+            <span className="utility-stat-value">{summary?.missing ?? 0}</span>
+            <span className="utility-stat-label"><AlertCircle size={13} /> Missing</span>
+          </div>
+          <div className="utility-stat">
+            <span className="utility-stat-value">{summary?.unchecked ?? 0}</span>
+            <span className="utility-stat-label"><HardDrive size={13} /> Not yet checked</span>
+          </div>
+        </div>
+
+        <div className="utility-actions">
+          <button type="button" className="primary-button" onClick={() => void runCheck()} disabled={running || total === 0}>
+            <RefreshCw size={14} className={running ? 'spinning' : ''} />
+            {running ? 'Checking…' : 'Check library'}
+          </button>
+          <span className="utility-meta">{formatChecked(summary?.last_checked_at ?? null)}</span>
+        </div>
+      </section>
+
+      {broken.length > 0 && (
+        <section className="utility-card">
+          <div className="utility-card-head">
+            <span className="utility-icon danger"><AlertCircle size={18} /></span>
+            <div>
+              <h3>Missing originals</h3>
+              <p className="utility-sub">
+                These files no longer exist in Telegram. Their details are kept so you can
+                re-upload them from another copy.
+              </p>
+            </div>
+          </div>
+          <ul className="utility-list">
+            {broken.map((item) => (
+              <li key={item.id}>
+                <span className="utility-list-name">{item.name}</span>
+                <span className="utility-list-meta">
+                  {new Date(item.captured_at).toLocaleDateString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  )
+}

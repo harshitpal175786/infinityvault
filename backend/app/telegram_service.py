@@ -245,6 +245,45 @@ class TelegramService:
 
         return cache_path
 
+    async def check_integrity(self, client_id: str, limit: int = 500) -> dict:
+        """Verify that each backed-up original still exists in Telegram.
+
+        Uses one metadata lookup per item. Messages are fetched in small
+        batches because Telethon turns `get_messages(ids=[...])` into a single
+        round trip, but very large id lists are rejected by the API.
+        """
+        client = await self.get_authorized_client(client_id)
+        if not client:
+            raise ValueError("Reconnect Telegram before checking your library")
+
+        rows = db.list_media_for_integrity(client_id)
+        # Newest first is the useful order; cap the work per invocation so a
+        # huge library does not block the request for minutes.
+        rows = rows[:limit]
+
+        checked = {"ok": 0, "missing": 0}
+        batch_size = 100
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start:start + batch_size]
+            ids = [row["telegram_message_id"] for row in batch]
+            try:
+                messages = await client.get_messages("me", ids=ids)
+            except Exception as error:
+                raise ValueError(f"Telegram rejected the lookup: {error}") from error
+
+            # get_messages returns None for deleted ids and keeps positional order.
+            by_id = {row["telegram_message_id"]: row for row in batch}
+            for message_id, message in zip(ids, messages):
+                row = by_id[message_id]
+                # A message with no media means the file itself was removed but
+                # the message survived, which is also a loss.
+                exists = bool(message) and bool(getattr(message, "media", None))
+                state = "ok" if exists else "missing"
+                db.set_integrity_state(row["id"], state)
+                checked[state] = checked.get(state, 0) + 1
+
+        return {**checked, "total": len(rows), **db.integrity_summary(client_id)}
+
     async def _upload_worker(self) -> None:
         while True:
             media_id = await self.upload_queue.get()

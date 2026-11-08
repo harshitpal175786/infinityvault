@@ -74,6 +74,10 @@
 
   /* Anchor: Immich --immich-primary = 66 80 175 */
   --primary: #4250af;
+  /* Tinted backgrounds for icon chips and callouts. Derived from --primary so
+     a palette change only has to happen in one place. */
+  --primary-soft: rgba(66, 80, 175, 0.10);
+  --danger-soft: rgba(180, 69, 63, 0.10);
   --on-primary: #ffffff;
   --primary-container: #e9edfd;
   --on-primary-container: #2c3a86;
@@ -114,6 +118,8 @@
   --outline-strong: #3d3d3d;
 
   --primary: #accbfa;
+  --primary-soft: rgba(172, 203, 250, 0.14);
+  --danger-soft: rgba(240, 138, 132, 0.14);
   --on-primary: #0a0a0a;
   --primary-container: #1e2a3f;
   --on-primary-container: #c5dcff;

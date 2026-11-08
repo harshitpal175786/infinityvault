@@ -31,17 +31,19 @@ import {
   Upload,
   X,
   Zap,
+  ShieldCheck,
 } from 'lucide-react'
 import { createMediaItem } from './media'
 import { useTheme } from './hooks/useTheme'
 import { usePolling } from './hooks/usePolling'
 import { ThemeToggle } from './components/ThemeToggle'
+import { UtilitiesPage } from './components/UtilitiesPage'
 import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getTelegramStatus, listAlbums, listMedia, listMediaPage, listTags, mediaUrl, retryMedia, updateMedia, startTelegramAuth, uploadMedia, verifyTelegramAuth } from './api'
 import type { Album, ApiMedia, Tag, TelegramAuthResponse, TelegramStatus } from './api'
 import type { MediaItem, MediaType, UploadStatus } from './types'
 
 type Filter = 'all' | MediaType
-type LibraryView = 'library' | 'favorites' | 'archive' | 'trash' | 'album'
+type LibraryView = 'library' | 'favorites' | 'archive' | 'trash' | 'album' | 'utilities'
 
 const filters: { value: Filter; label: string }[] = [
   { value: 'all', label: 'All media' },
@@ -514,9 +516,11 @@ function App() {
       ? 'Archive'
       : libraryView === 'trash'
         ? 'Trash'
-        : libraryView === 'album'
-          ? albums.find((album) => album.id === activeAlbumId)?.name ?? 'Album'
-          : filter === 'video' ? 'Videos' : filter === 'photo' ? 'Photos' : 'Your photos'
+        : libraryView === 'utilities'
+          ? 'Utilities'
+          : libraryView === 'album'
+            ? albums.find((album) => album.id === activeAlbumId)?.name ?? 'Album'
+            : filter === 'video' ? 'Videos' : filter === 'photo' ? 'Photos' : 'Your photos'
 
   function downloadSelected() {
     selectedItems.filter((item) => item.downloadUrl).forEach((item, index) => {
@@ -564,6 +568,9 @@ function App() {
           </button>
           <button className={libraryView === 'trash' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('trash')}>
             <Trash2 size={18} /><span>Trash</span>
+          </button>
+          <button className={libraryView === 'utilities' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('utilities')}>
+            <ShieldCheck size={18} /><span>Utilities</span>
           </button>
         </div>
 
@@ -699,7 +706,9 @@ function App() {
           )}
 
           <div className={isDragging ? 'drop-zone dragging' : 'drop-zone'} onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop}>
-            {groupedItems.length > 0 ? groupedItems.map((group) => (
+            {libraryView === 'utilities' ? (
+              <UtilitiesPage onNotice={setNotice} />
+            ) : groupedItems.length > 0 ? groupedItems.map((group) => (
               <section className="date-group" key={dateKey(group.date)}>
                 <div className="date-heading"><h3>{group.label}</h3><span>{group.items.length} {group.items.length === 1 ? 'item' : 'items'}</span></div>
                 <div className="media-grid">
