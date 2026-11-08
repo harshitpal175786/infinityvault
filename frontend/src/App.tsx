@@ -96,6 +96,8 @@ function itemFromApi(media: ApiMedia): MediaItem {
     name: media.name,
     type: media.type,
     url: mediaUrl(media.preview_url),
+    microUrl: media.thumb_state === 'ready' ? mediaUrl(`${media.preview_url.replace('/thumbnail', '/micro-thumbnail')}`) : undefined,
+    contentUrl: media.content_url ? mediaUrl(media.content_url) : undefined,
     telegramUrl: media.telegram_url ? mediaUrl(media.telegram_url) : undefined,
     downloadUrl: media.telegram_download_url ? mediaUrl(media.telegram_download_url) : undefined,
     size: media.size,
@@ -738,11 +740,15 @@ function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView, onFav
   // Start failed if the server already told us the local copy is gone, so we
   // do not fire a request that is guaranteed to 404.
   const [previewFailed, setPreviewFailed] = useState(item.fileState === 'missing')
+  // Only show the blur-up once the real thumbnail has decoded, otherwise the
+  // tile would flash blurry and then fade to the same blurry image.
+  const [loaded, setLoaded] = useState(false)
 
   return (
     <article className={selected ? 'media-card selected' : 'media-card'} data-id={item.id}>
       <div
-        className="media-preview"
+        className={`media-preview${loaded ? ' loaded' : ''}`}
+        style={item.microUrl && !previewFailed ? { backgroundImage: `url(${item.microUrl})` } : undefined}
         role="button"
         tabIndex={0}
         aria-label={`Open ${item.name}`}
@@ -760,9 +766,14 @@ function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView, onFav
               <AlertCircle size={16} />
               <span>{item.fileState === 'missing' ? 'File missing' : 'Preview unavailable'}</span>
             </div>
-          : item.type === 'photo'
-            ? <img src={item.url} alt={item.name} loading="lazy" onError={() => setPreviewFailed(true)} />
-            : <video src={item.url} muted playsInline preload="metadata" onError={() => setPreviewFailed(true)} />}
+          : <img
+              src={item.url}
+              alt={item.name}
+              loading="lazy"
+              decoding="async"
+              onLoad={() => setLoaded(true)}
+              onError={() => setPreviewFailed(true)}
+            />}
         {item.type === 'video' && <div className="video-overlay"><Play size={14} fill="currentColor" /></div>}
         {item.type === 'video' && item.duration !== undefined && <span className="duration-chip">{formatDuration(item.duration)}</span>}
         {item.uploadStatus !== 'uploaded' && <span className={`backup-chip status-${item.uploadStatus}`}>{statusIcon} {statusLabel(item.uploadStatus)}</span>}

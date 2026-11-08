@@ -6,7 +6,12 @@ export type MediaItem = {
   id: string
   name: string
   type: MediaType
+  /** Cached 400px preview used by the grid and viewer. */
   url: string
+  /** Small blurred placeholder; undefined until generated. */
+  microUrl?: string
+  /** Full-size original, only fetched on explicit download. */
+  contentUrl?: string
   telegramUrl?: string
   downloadUrl?: string
   size: number

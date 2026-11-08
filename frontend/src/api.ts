@@ -31,6 +31,8 @@ export type ApiMedia = {
   duration?: number
   preview_url: string
   file_state?: 'present' | 'missing' | 'recovering'
+  content_url?: string
+  thumb_state?: 'pending' | 'running' | 'ready' | 'failed'
   telegram_url?: string
   telegram_download_url?: string
   upload_status: UploadStatus

@@ -6,7 +6,7 @@
 
 **Plan:** `docs/PRD-PHASES.md`
 **Baseline commit:** `d68fac7`
-**Current phase:** Phase 2 next — Phase 1 complete
+**Current phase:** Phase 2.2 (integrity check) next — 2.1 complete
 
 ---
 
@@ -17,8 +17,8 @@
 | 1. Trust the library | ✅ Done | — | 1.1 + 1.2 verified |
 | 1.1 `local_path` reconciliation | ✅ | — | Verified on real DB |
 | 1.2 Pagination | ✅ | — | Verified in browser |
-| 2. Telegram cold store | ⬜ Not started | — | |
-| 2.1 Thumbnails | ⬜ | — | |
+| 2. Telegram cold store | 🟡 In progress | — | Thumbnails done |
+| 2.1 Thumbnails | ✅ | — | Grid never fetches originals |
 | 2.2 Integrity check | ⬜ | — | |
 | 3. Identity / auth | ⬜ Not started | — | Deploy gate |
 | 3.1 Token auth | ⬜ | — | |
@@ -127,15 +127,33 @@ _Log:_
 
 ### 2.1 Thumbnails
 
-- [ ] `data/thumbnails/` with `_thumb.webp` (400px) and `_micro.webp` (32px)
-- [ ] `thumbnail_jobs` queue mirroring `upload_jobs`
-- [ ] `GET /api/media/{id}/thumbnail` with immutable caching
-- [ ] `preview_url` points at the thumbnail
-- [ ] Video frame extraction via ffmpeg
-- [ ] `POST /api/thumbnails/backfill`
-- [ ] Verified: grid makes zero `/content` requests
+- [x] `data/thumbnails/` with `_thumb.webp` (400px) and `_micro.webp` (32px)
+- [x] `thumbnail_jobs` queue mirroring `upload_jobs`
+- [x] `GET /api/media/{id}/thumbnail` with immutable caching
+- [x] `preview_url` points at the thumbnail; `content_url` added for originals
+- [x] Video frame extraction via ffmpeg (frame at 1s, not 0 — often black)
+- [x] `POST /api/thumbnails/backfill`
+- [x] Verified: grid makes zero `/content` requests
 
-_Log:_ (empty)
+_Log:_
+- 2026-02-14 — Implemented `thumbnail_service.py`. Pillow + WebP, EXIF
+  orientation applied, serial worker, generation always off the request path.
+- Measured: 3000x2000 PNG → 0.3 KB thumb (64x reduction); real 91.8 KB photo
+  → 19.8 KB thumb; 1280x720 video → 3.5 KB frame thumbnail.
+- Video frame confirmed visually to be real content, not a black first frame.
+- Real library backfilled: 2 items → `ready`, 29.5 KB for a full-size portrait.
+- **Bug 1 (major):** `<img>`/`<video>` cannot send `X-Client-ID`, so every
+  thumbnail request fell back to `local-user` and 404'd. Chrome then turned
+  that JSON 404 into `net::ERR_BLOCKED_BY_ORB`, which surfaced as a misleading
+  "Preview unavailable". Fixed by accepting `?client_id=` on both thumbnail
+  endpoints (the frontend already appended it via `mediaUrl()`).
+- **Bug 2:** ORB also needs `Cross-Origin-Resource-Policy: cross-origin` on
+  image responses. Added to both.
+- **Bug 3:** video tiles rendered a full `<video>` element as the poster,
+  downloading video data to paint a tile. Now an `<img>` of the thumbnail.
+- Verified in Chromium: 3 tiles, 3 loaded, **0 `/content` requests**, theme
+  toggle still works, micro placeholders served.
+- `Pillow>=10` added to requirements.txt.
 
 ### 2.2 Integrity check
 

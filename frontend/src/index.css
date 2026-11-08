@@ -1725,3 +1725,29 @@
   opacity: 0.6;
   cursor: default;
 }
+
+/* Blur-up placeholder. The micro WebP is set as an inline background on the
+   tile; the real thumbnail sits on top and fades in once decoded. */
+.media-preview {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.media-preview img,
+.media-preview video {
+  opacity: 0;
+  transition: opacity 220ms var(--ease);
+}
+
+.media-preview.loaded img,
+.media-preview.loaded video {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .media-preview img,
+  .media-preview video {
+    transition: none;
+  }
+}

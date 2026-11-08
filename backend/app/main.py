@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from . import db
 from .face_service import FaceService, FaceUnavailable
+from .thumbnail_service import ThumbnailService
 
 logger = logging.getLogger(__name__)
 # uvicorn configures its own loggers but leaves ours without a handler, so
@@ -40,6 +41,10 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Local file reconciliation failed")
 
+    thumbs = ThumbnailService()
+    app.state.thumbnail_service = thumbs
+    await thumbs.start()
+
     faces = FaceService()
     app.state.face_service = faces
     await faces.start()
@@ -47,6 +52,7 @@ async def lifespan(app: FastAPI):
     yield
 
     await faces.stop()
+    await thumbs.stop()
     await service.stop()
 
 
@@ -109,6 +115,10 @@ def telegram_service(request: Request) -> TelegramService:
 
 def face_service(request: Request) -> FaceService:
     return request.app.state.face_service
+
+
+def thumbnail_service(request: Request) -> ThumbnailService:
+    return request.app.state.thumbnail_service
 
 
 def friendly_telegram_error(error: Exception) -> str:
@@ -275,6 +285,12 @@ async def upload_media(
         local_path=db.to_relative(local_path),
         checksum=checksum,
     )
+    # Thumbnails are generated in the background for photos and videos alike.
+    try:
+        db.enqueue_thumbnail_job(media_id)
+    except Exception:
+        pass
+
     await telegram_service(request).enqueue(media_id)
     if media_type == "photo":
         # Faces are optional and never block the upload response.
@@ -395,6 +411,92 @@ def add_tag_media(
     return {"added": added}
 
 
+@app.get("/api/media/{media_id}/thumbnail")
+def media_thumbnail(
+    media_id: str,
+    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+):
+    """Small cached WebP for the grid.
+
+    Falls back to the original when a thumbnail has not been generated yet, so
+    a freshly imported photo is never a broken tile. The `thumb_state` field
+    tells the UI whether it is looking at a real thumbnail.
+    """
+    # <img>/<video> cannot send X-Client-ID, so the query param is the normal
+    # path for these two endpoints.
+    effective_client_id = query_client_id or client_id
+    row = db.get_media(media_id, effective_client_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Media not found")
+
+    thumb_file, _ = db.thumb_paths(media_id)
+    if thumb_file.is_file():
+        return FileResponse(
+            thumb_file,
+            media_type="image/webp",
+            headers={
+                "Cache-Control": "private, max-age=31536000, immutable",
+                # Cross-Origin-Resource-Policy: Chrome's ORB blocks cross-origin
+                # image responses that lack it, which surfaced as
+                # ERR_BLOCKED_BY_ORB and a "Preview unavailable" tile.
+                "Cross-Origin-Resource-Policy": "cross-origin",
+            },
+        )
+
+    # Not generated yet: queue it if it was never queued, and serve the
+    # original so the tile still renders.
+    try:
+        if row["thumb_state"] in ("pending", "failed"):
+            db.enqueue_thumbnail_job(media_id)
+    except Exception:
+        pass
+
+    path = db.resolve_local_path(row["local_path"])
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="The preview file is missing")
+    return FileResponse(
+        path,
+        media_type=row["mime_type"],
+        headers={"Cache-Control": "private, max-age=60"},
+    )
+
+
+@app.get("/api/media/{media_id}/micro-thumbnail")
+def media_micro_thumbnail(
+    media_id: str,
+    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+):
+    """Tiny blurred placeholder for progressive tile loading."""
+    effective_client_id = query_client_id or client_id
+    row = db.get_media(media_id, effective_client_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Media not found")
+    _, micro_file = db.thumb_paths(media_id)
+    if not micro_file.is_file():
+        raise HTTPException(status_code=404, detail="No blurred placeholder yet")
+    return FileResponse(
+        micro_file,
+        media_type="image/webp",
+        headers={
+            "Cache-Control": "private, max-age=31536000, immutable",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+    )
+
+
+@app.post("/api/thumbnails/backfill")
+def thumbnails_backfill(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+    """Queue every asset that has no thumbnail yet."""
+    return {"queued": db.enqueue_all_thumbnails(client_id)}
+
+
+@app.get("/api/thumbnails/status")
+def thumbnails_status(request: Request, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+    return {**thumbnail_service(request).status(), **db.thumbnail_job_stats(client_id)}
+
+
 @app.get("/api/media/{media_id}/content")
 def media_content(
     media_id: str,
@@ -463,6 +565,12 @@ async def retry_media(
 ) -> dict:
     if not db.retry_media(media_id, client_id):
         raise HTTPException(status_code=404, detail="Media not found")
+    # Thumbnails are generated in the background for photos and videos alike.
+    try:
+        db.enqueue_thumbnail_job(media_id)
+    except Exception:
+        pass
+
     await telegram_service(request).enqueue(media_id)
     if media_type == "photo":
         # Faces are optional and never block the upload response.

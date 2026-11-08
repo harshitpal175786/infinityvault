@@ -12,6 +12,9 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 CACHE_DIR = DATA_DIR / "telegram-cache"
+THUMB_DIR = DATA_DIR / "thumbnails"
+THUMB_LONGEST_EDGE = 400
+MICRO_LONGEST_EDGE = 32
 DB_PATH = Path(os.getenv("INFINITYVAULT_DB_PATH", DATA_DIR / "infinityvault.db"))
 
 
@@ -30,6 +33,7 @@ def open_db() -> sqlite3.Connection:
 def init_db() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    THUMB_DIR.mkdir(parents=True, exist_ok=True)
     with closing(open_db()) as connection:
         connection.executescript(
             """
@@ -166,6 +170,22 @@ def init_db() -> None:
                 ON people(client_id, face_count DESC);
             """
         )
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS thumbnail_jobs (
+                id TEXT PRIMARY KEY,
+                media_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'queued',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS thumbnail_jobs_status
+                ON thumbnail_jobs(status, updated_at);
+            """
+        )
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(media_items)")}
         migrations = {
             "checksum": "ALTER TABLE media_items ADD COLUMN checksum TEXT",
@@ -177,6 +197,7 @@ def init_db() -> None:
             "latitude": "ALTER TABLE media_items ADD COLUMN latitude REAL",
             "longitude": "ALTER TABLE media_items ADD COLUMN longitude REAL",
             "file_state": "ALTER TABLE media_items ADD COLUMN file_state TEXT NOT NULL DEFAULT 'present'",
+            "thumb_state": "ALTER TABLE media_items ADD COLUMN thumb_state TEXT NOT NULL DEFAULT 'pending'",
         }
         for column, statement in migrations.items():
             if column not in columns:
@@ -711,7 +732,10 @@ def row_to_media(row: sqlite3.Row, api_prefix: str = "/api") -> dict[str, Any]:
         "folder_path": row["folder_path"],
         "latitude": row["latitude"],
         "longitude": row["longitude"],
-        "preview_url": f"{api_prefix}/media/{row['id']}/content",
+        # Grid/viewer image: a cached 400px WebP, not the full original.
+        "preview_url": f"{api_prefix}/media/{row['id']}/thumbnail",
+        # Full-size original, used only by explicit download actions.
+        "content_url": f"{api_prefix}/media/{row['id']}/content",
         "telegram_url": f"{api_prefix}/media/{row['id']}/telegram-content" if row["telegram_message_id"] else None,
         "telegram_download_url": f"{api_prefix}/media/{row['id']}/telegram-download" if row["telegram_message_id"] else None,
         "upload_status": row["upload_status"],
@@ -720,6 +744,9 @@ def row_to_media(row: sqlite3.Row, api_prefix: str = "/api") -> dict[str, Any]:
         # "missing" means the local copy is gone but metadata is intact; the
         # UI shows a placeholder instead of a broken image.
         "file_state": row["file_state"],
+        # pending | running | ready | failed — "ready" means preview_url is a
+        # real cached thumbnail rather than the full original.
+        "thumb_state": row["thumb_state"],
     }
 
 
@@ -1113,4 +1140,134 @@ def reconcile_local_files(telegram_lookup=None) -> dict[str, int]:
         stats["missing"] += 1
         set_file_state(row["id"], "missing")
 
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Thumbnails
+#
+# Sizes are fixed: the grid never renders a tile larger than a few hundred
+# pixels, so generating anything bigger wastes disk and time. WebP because it
+# is ~30% smaller than JPEG at these sizes and universally supported.
+# ---------------------------------------------------------------------------
+
+def thumb_paths(media_id: str) -> tuple[Path, Path]:
+    return THUMB_DIR / f"{media_id}_thumb.webp", THUMB_DIR / f"{media_id}_micro.webp"
+
+
+def thumbnails_exist(media_id: str) -> bool:
+    thumb, micro = thumb_paths(media_id)
+    return thumb.is_file() and micro.is_file()
+
+
+def enqueue_thumbnail_job(media_id: str) -> None:
+    """Queue thumbnail generation. Safe to call repeatedly."""
+    now = utc_now()
+    with closing(open_db()) as connection:
+        connection.execute(
+            """
+            INSERT INTO thumbnail_jobs (id, media_id, status, created_at, updated_at)
+            VALUES (?, ?, 'queued', ?, ?)
+            ON CONFLICT(media_id) DO UPDATE SET
+                status = 'queued',
+                last_error = NULL,
+                updated_at = excluded.updated_at
+            """,
+            (str(uuid4()), media_id, now, now),
+        )
+        connection.execute(
+            "UPDATE media_items SET thumb_state = 'pending' WHERE id = ?", (media_id,)
+        )
+        connection.commit()
+
+
+def enqueue_all_thumbnails(client_id: str) -> int:
+    """Queue every media row that has no thumbnail yet."""
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            "SELECT id FROM media_items WHERE client_id = ? AND thumb_state != 'ready'",
+            (client_id,),
+        ).fetchall()
+    for row in rows:
+        enqueue_thumbnail_job(row["id"])
+    return len(rows)
+
+
+def next_thumbnail_job() -> sqlite3.Row | None:
+    with closing(open_db()) as connection:
+        return connection.execute(
+            """
+            SELECT thumbnail_jobs.media_id, media_items.local_path, media_items.media_type
+            FROM thumbnail_jobs
+            JOIN media_items ON media_items.id = thumbnail_jobs.media_id
+            WHERE thumbnail_jobs.status = 'queued'
+            ORDER BY thumbnail_jobs.created_at
+            LIMIT 1
+            """
+        ).fetchone()
+
+
+def mark_thumbnail_running(media_id: str) -> None:
+    now = utc_now()
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE thumbnail_jobs SET status = 'running', attempts = attempts + 1, updated_at = ? "
+            "WHERE media_id = ?",
+            (now, media_id),
+        )
+        connection.execute(
+            "UPDATE media_items SET thumb_state = 'running' WHERE id = ?", (media_id,)
+        )
+        connection.commit()
+
+
+def mark_thumbnail_done(media_id: str) -> None:
+    now = utc_now()
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE thumbnail_jobs SET status = 'done', last_error = NULL, updated_at = ? "
+            "WHERE media_id = ?",
+            (now, media_id),
+        )
+        connection.execute(
+            "UPDATE media_items SET thumb_state = 'ready' WHERE id = ?", (media_id,)
+        )
+        connection.commit()
+
+
+def mark_thumbnail_failed(media_id: str, reason: str) -> None:
+    now = utc_now()
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE thumbnail_jobs SET status = 'failed', last_error = ?, updated_at = ? "
+            "WHERE media_id = ?",
+            (reason[:500], now, media_id),
+        )
+        connection.execute(
+            "UPDATE media_items SET thumb_state = 'failed' WHERE id = ?", (media_id,)
+        )
+        connection.commit()
+
+
+def reset_interrupted_thumbnail_jobs() -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE thumbnail_jobs SET status = 'queued' WHERE status = 'running'"
+        )
+        connection.execute(
+            "UPDATE media_items SET thumb_state = 'pending' WHERE thumb_state = 'running'"
+        )
+        connection.commit()
+
+
+def thumbnail_job_stats(client_id: str) -> dict[str, int]:
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            "SELECT thumb_state, COUNT(*) AS n FROM media_items WHERE client_id = ? "
+            "GROUP BY thumb_state",
+            (client_id,),
+        ).fetchall()
+    stats = {"pending": 0, "running": 0, "ready": 0, "failed": 0}
+    for row in rows:
+        stats[row["thumb_state"]] = row["n"]
     return stats
