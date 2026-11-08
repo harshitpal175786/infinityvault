@@ -1,0 +1,539 @@
+/* ==========================================================================
+   Phase 1 — Design system primitives
+   Buttons, tooltips, modals, toasts, spinners, skeletons, dropdowns and the
+   global focus ring. Built on the existing tokens only: no literal colours,
+   no new dependencies, all three breakpoints respected.
+   ========================================================================== */
+
+/* --- Global focus ring ---------------------------------------------------
+   One ring for the whole app. Before this, only three selectors had a
+   focus-visible style across 2,768 lines of CSS, so keyboard users could not
+   reliably tell where they were. Colour comes from the token layer, and the
+   offset keeps the ring clear of the element's own border. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Hide the ring for pointer users without disabling it for keyboards. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* --- Button -------------------------------------------------------------
+   One primitive with variants. The older .ghost-button and .primary-button
+   classes stay so existing screens keep their exact appearance; both are now
+   expressed in terms of the same tokens. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-body);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* Primary: the single most important action on a screen. */
+.btn--primary {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+/* Secondary: default. Neutral surface, visible border. */
+.btn--secondary {
+  background: var(--surface);
+  color: var(--on-surface);
+  border-color: var(--outline);
+}
+
+.btn--secondary:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--outline-strong);
+}
+
+/* Ghost: low emphasis, used in toolbars and rows. */
+.btn--ghost {
+  background: transparent;
+  color: var(--on-surface-variant);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--on-surface);
+}
+
+.btn--danger {
+  background: var(--danger-container);
+  color: var(--danger);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--on-primary);
+}
+
+.btn--sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--text-xs);
+  gap: 5px;
+}
+
+.btn--lg {
+  height: 40px;
+  padding: 0 18px;
+  font-size: var(--text-md);
+}
+
+.btn--block {
+  width: 100%;
+}
+
+/* Icon-only: square, no label. Always needs an accessible name. */
+.btn--icon {
+  width: 34px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.btn--icon.btn--sm {
+  width: 28px;
+  padding: 0;
+}
+
+@media (max-width: 767px) {
+  /* Touch targets must stay reachable on a phone. */
+  .btn {
+    height: 38px;
+  }
+
+  .btn--icon {
+    width: 38px;
+  }
+}
+
+/* --- Spinner ------------------------------------------------------------
+   Uses currentColor so it works on any surface without a variant class. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spinner-rotate 640ms linear infinite;
+  flex-shrink: 0;
+}
+
+.spinner--lg {
+  width: 22px;
+  height: 22px;
+  border-width: 3px;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* A spinner is the one place motion is informative, so slow it rather than
+     freezing it: a static spinner looks like a dead control. */
+  .spinner {
+    animation-duration: 1800ms;
+  }
+}
+
+/* --- Skeleton -----------------------------------------------------------
+   Placeholder for content that has a known shape but unknown data. */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface-3) 37%,
+    var(--surface-2) 63%
+  );
+  background-size: 400% 100%;
+  border-radius: var(--radius-sm);
+  animation: skeleton-sweep 1400ms ease-in-out infinite;
+}
+
+.skeleton--text {
+  height: 10px;
+  border-radius: var(--radius-pill);
+}
+
+.skeleton--tile {
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+}
+
+@keyframes skeleton-sweep {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background: var(--surface-2);
+  }
+}
+
+/* --- Tooltip ------------------------------------------------------------
+   Hover and focus both reveal it, so keyboard users get the same labels as
+   pointer users. The bubble is rendered by React into a portal, so it is never
+   clipped by an ancestor's overflow. */
+.tooltip {
+  position: fixed;
+  z-index: var(--z-toast);
+  max-width: 240px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--on-surface);
+  color: var(--surface);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.35;
+  pointer-events: none;
+  box-shadow: var(--shadow-2);
+  animation: tooltip-in var(--dur-fast) var(--ease);
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip {
+    animation: none;
+  }
+}
+
+/* --- Dropdown / menu ---------------------------------------------------- */
+.menu {
+  position: fixed;
+  z-index: var(--z-modal);
+  min-width: 190px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  animation: menu-in var(--dur-fast) var(--ease);
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu {
+    animation: none;
+  }
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--on-surface);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.menu-item--danger {
+  color: var(--danger);
+}
+
+.menu-item--danger:hover:not(:disabled) {
+  background: var(--danger-container);
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--outline);
+  border: 0;
+}
+
+.menu-label {
+  padding: 6px 9px 4px;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--on-surface-variant);
+}
+
+/* --- Modal / dialog ----------------------------------------------------
+   Shared shell so the two existing bespoke modals can adopt it without
+   changing how they look. */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: var(--scrim);
+  animation: scrim-in var(--dur) var(--ease);
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.modal-panel {
+  width: min(100%, 480px);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 22px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  animation: panel-in var(--dur) var(--ease);
+}
+
+.modal-panel--wide {
+  width: min(100%, 620px);
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-scrim,
+  .modal-panel {
+    animation: none;
+  }
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--on-surface);
+}
+
+.modal-body {
+  color: var(--on-surface-variant);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+@media (max-width: 767px) {
+  .modal-scrim {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal-panel {
+    width: 100%;
+    max-height: 88vh;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    animation: sheet-in var(--dur) var(--ease);
+  }
+
+  @keyframes sheet-in {
+    from {
+      transform: translateY(100%);
+    }
+  }
+}
+
+/* --- Toast -------------------------------------------------------------
+   Stacked in the top-right. Each toast is announced by role=status so screen
+   readers read errors without the user finding them. */
+.toast-stack {
+  position: fixed;
+  /* Below the topbar rather than over it: at top:14px the stack covered the
+     search field and the add button, so a toast hid the very controls the user
+     was about to reach for. */
+  top: calc(var(--topbar-h) + 10px);
+  right: 14px;
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100vw - 28px));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--outline);
+  border-left: 3px solid var(--on-surface-variant);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--on-surface);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  box-shadow: var(--shadow-3);
+  pointer-events: auto;
+  animation: toast-in var(--dur) var(--ease);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+.toast--success {
+  border-left-color: var(--success);
+}
+
+.toast--error {
+  border-left-color: var(--danger);
+}
+
+.toast--info {
+  border-left-color: var(--primary);
+}
+
+.toast-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.toast--success .toast-icon {
+  color: var(--success);
+}
+
+.toast--error .toast-icon {
+  color: var(--danger);
+}
+
+.toast--info .toast-icon {
+  color: var(--primary);
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  background: var(--surface-2);
+  color: var(--on-surface);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .toast-stack {
+    top: calc(var(--topbar-h) + 6px);
+    right: 8px;
+    left: 8px;
+    width: auto;
+  }
+}
+
+/* --- Visually hidden ---------------------------------------------------
+   For accessible names on icon-only controls. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

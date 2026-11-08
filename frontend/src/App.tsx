@@ -47,6 +47,7 @@ import { Sidebar } from './components/Sidebar'
 import { EmptyState, MediaCard, MediaDetailsModal, MediaViewer, TelegramModal } from './components/MediaViews'
 import { useLibraryFilters, FILTERS, type Filter, type LibraryView } from './hooks/useLibraryFilters'
 import { useInfiniteScroll } from './hooks/useInfiniteScroll'
+import { useToast } from './components/Toast'
 import { dateKey, formatDateHeading, formatDuration, formatSize, formatTime, itemFromApi, statusLabel } from './lib/format'
 import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listCameras, listMedia, listMediaPage, listPeople, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
 import type { Album, ApiMedia, CameraOption, MediaFilterParams, Tag, TelegramAuthResponse, TelegramStatus } from './api'
@@ -98,7 +99,22 @@ function App() {
   const [viewingItem, setViewingItem] = useState<MediaItem | null>(null)
   const [editingItem, setEditingItem] = useState<MediaItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Kept as a single helper so the ~20 existing call sites do not change, but
+  // messages now go through the toast queue: they stack instead of overwriting
+  // each other, and errors are announced assertively to screen readers.
+  const toast = useToast()
   const [notice, setNotice] = useState('')
+
+  // Anything containing "could", "cannot", "failed" or "not" is a problem the
+  // user has to act on, so it is surfaced as an error rather than a success.
+  const notify = useCallback((message: string) => {
+    setNotice(message)
+    if (/could not|cannot|failed|not available|unable|error/i.test(message)) {
+      toast.error(message)
+    } else {
+      toast.success(message)
+    }
+  }, [toast])
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus>({
     configured: false,
     connected: false,
@@ -135,7 +151,7 @@ function App() {
       setNextCursor(page.nextCursor)
       loadedPagesRef.current += 1
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Could not load more photos.')
+      notify(error instanceof Error ? error.message : 'Could not load more photos.')
     } finally {
       setLoadingMore(false)
     }
@@ -208,7 +224,7 @@ function App() {
       setPeople(savedPeople)
     } catch (error) {
       if (showError && seq === requestSeq.current) {
-        setNotice(error instanceof Error ? error.message : 'The local service is not available yet.')
+        notify(error instanceof Error ? error.message : 'The local service is not available yet.')
       }
     }
   }
@@ -348,12 +364,12 @@ function App() {
     const validItems = createdItems.filter((item): item is MediaItem => Boolean(item))
 
     if (validItems.length === 0) {
-      setNotice('Choose image or video files to add them to your timeline.')
+      notify('Choose image or video files to add them to your timeline.')
       return
     }
 
     setItems((current) => [...current, ...validItems])
-    setNotice(`${validItems.length} ${validItems.length === 1 ? 'item' : 'items'} added. Preparing a private backup…`)
+    notify(`${validItems.length} ${validItems.length === 1 ? 'item' : 'items'} added. Preparing a private backup…`)
     validItems.forEach((item) => void syncItem(item))
   }
 
@@ -369,7 +385,7 @@ function App() {
         uploadStatus: 'local',
         uploadError: error instanceof Error ? error.message : 'The backup service is unavailable.',
       } : currentItem))
-      setNotice('The media is visible locally, but the backup service could not be reached. You can try again after starting the backend.')
+      notify('The media is visible locally, but the backup service could not be reached. You can try again after starting the backend.')
     }
   }
 
@@ -383,7 +399,7 @@ function App() {
       const saved = await retryMedia(item.id)
       setItems((current) => current.map((currentItem) => currentItem.id === item.id ? itemFromApi(saved, mediaUrl) : currentItem))
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'This item could not be queued again.')
+      notify(error instanceof Error ? error.message : 'This item could not be queued again.')
     }
   }
 
@@ -392,9 +408,9 @@ function App() {
       await Promise.all(selectedItems.map((item) => updateMedia(item.id, payload)))
       await refreshLibrary(false)
       clearSelection()
-      setNotice(successMessage)
+      notify(successMessage)
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Some selected items could not be updated.')
+      notify(error instanceof Error ? error.message : 'Some selected items could not be updated.')
     }
   }
 
@@ -403,7 +419,7 @@ function App() {
       const saved = await updateMedia(item.id, { favorite: !item.isFavorite })
       setItems((current) => current.map((currentItem) => currentItem.id === item.id ? itemFromApi(saved, mediaUrl) : currentItem))
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Favorite state could not be updated.')
+      notify(error instanceof Error ? error.message : 'Favorite state could not be updated.')
     }
   }
 
@@ -412,9 +428,9 @@ function App() {
       await updateMedia(item.id, { description, folder_path: folderPath, captured_at: new Date(capturedAt).toISOString() })
       setEditingItem(null)
       await refreshLibrary(false)
-      setNotice('Media details updated.')
+      notify('Media details updated.')
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Media details could not be updated.')
+      notify(error instanceof Error ? error.message : 'Media details could not be updated.')
     }
   }
 
@@ -435,14 +451,14 @@ function App() {
       if (selectedIds.size > 0) {
         await addMediaToAlbum(album.id, Array.from(selectedIds))
         clearSelection()
-        setNotice(`${name} created with selected media.`)
+        notify(`${name} created with selected media.`)
       } else {
-        setNotice(`${name} created.`)
+        notify(`${name} created.`)
       }
       setActiveAlbumId(album.id)
       setLibraryView('album')
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'The album could not be created.')
+      notify(error instanceof Error ? error.message : 'The album could not be created.')
     }
   }
 
@@ -455,9 +471,9 @@ function App() {
       await addMediaToAlbum(album.id, Array.from(selectedIds))
       await refreshLibrary(false)
       clearSelection()
-      setNotice(`Added media to ${album.name}.`)
+      notify(`Added media to ${album.name}.`)
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Media could not be added to the album.')
+      notify(error instanceof Error ? error.message : 'Media could not be added to the album.')
     }
   }
 
@@ -470,9 +486,9 @@ function App() {
       await addTagToMedia(tag.id, Array.from(selectedIds))
       await refreshLibrary(false)
       clearSelection()
-      setNotice(`Tagged ${selectedIds.size} item${selectedIds.size === 1 ? '' : 's'} as ${tag.name}.`)
+      notify(`Tagged ${selectedIds.size} item${selectedIds.size === 1 ? '' : 's'} as ${tag.name}.`)
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'The tag could not be applied.')
+      notify(error instanceof Error ? error.message : 'The tag could not be applied.')
     }
   }
 
@@ -482,9 +498,9 @@ function App() {
       await Promise.all(selectedItems.map((item) => deleteMedia(item.id)))
       await refreshLibrary(false)
       clearSelection()
-      setNotice('Selected media permanently deleted.')
+      notify('Selected media permanently deleted.')
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Media could not be permanently deleted.')
+      notify(error instanceof Error ? error.message : 'Media could not be permanently deleted.')
     }
   }
 
@@ -492,7 +508,7 @@ function App() {
     const status = await getTelegramStatus()
     setTelegramStatus(status)
     setIsTelegramOpen(false)
-    setNotice(status.display_name ? `Telegram connected as ${status.display_name}. Waiting media will upload now.` : 'Telegram connected. Waiting media will upload now.')
+    notify(status.display_name ? `Telegram connected as ${status.display_name}. Waiting media will upload now.` : 'Telegram connected. Waiting media will upload now.')
     void refreshLibrary(false)
   }
 
@@ -500,7 +516,7 @@ function App() {
     const status = await getTelegramStatus()
     setTelegramStatus(status)
     setIsTelegramOpen(false)
-    setNotice('Telegram disconnected. New media will stay queued until you connect again.')
+    notify('Telegram disconnected. New media will stay queued until you connect again.')
     void refreshLibrary(false)
   }
 
@@ -555,7 +571,7 @@ function App() {
         anchor.remove()
       }, index * 250)
     })
-    setNotice(`${selectedItems.filter((item) => item.downloadUrl).length} original ${selectedItems.length === 1 ? 'file' : 'files'} queued for download.`)
+    notify(`${selectedItems.filter((item) => item.downloadUrl).length} original ${selectedItems.length === 1 ? 'file' : 'files'} queued for download.`)
     clearSelection()
   }
 
@@ -847,7 +863,7 @@ function App() {
             <div className="notice" role="status">
               <Check size={16} />
               <span>{notice}</span>
-              <button className="notice-close" type="button" aria-label="Dismiss notice" onClick={() => setNotice('')}><X size={15} /></button>
+              <button className="notice-close" type="button" aria-label="Dismiss notice" onClick={() => notify('')}><X size={15} /></button>
             </div>
           )}
 
