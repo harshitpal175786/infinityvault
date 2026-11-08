@@ -2,22 +2,20 @@ import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 're
 import {
   AlertCircle,
   Archive,
-  CheckSquare,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Cloud,
   Download,
-  Eye,
   Film,
   Folder,
   ImagePlus,
   Images,
-  LockKeyhole,
   LayoutGrid,
   Menu,
-  MoreHorizontal,
   Pencil,
   Play,
   Plus,
@@ -26,9 +24,7 @@ import {
   Search,
   Send,
   Settings2,
-  ShieldCheck,
   SlidersHorizontal,
-  Sparkles,
   Star,
   Tag as TagIcon,
   Trash2,
@@ -37,6 +33,9 @@ import {
   Zap,
 } from 'lucide-react'
 import { createMediaItem } from './media'
+import { useTheme } from './hooks/useTheme'
+import { usePolling } from './hooks/usePolling'
+import { ThemeToggle } from './components/ThemeToggle'
 import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getTelegramStatus, listAlbums, listMedia, listTags, mediaUrl, retryMedia, updateMedia, startTelegramAuth, uploadMedia, verifyTelegramAuth } from './api'
 import type { Album, ApiMedia, Tag, TelegramAuthResponse, TelegramStatus } from './api'
 import type { MediaItem, MediaType, UploadStatus } from './types'
@@ -128,7 +127,10 @@ function statusLabel(status: UploadStatus): string {
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const { theme, toggleTheme } = useTheme()
   const [items, setItems] = useState<MediaItem[]>([])
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem('infinityvault-sidebar') === 'collapsed')
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const [filter, setFilter] = useState<Filter>('all')
   const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc')
   const [libraryView, setLibraryView] = useState<LibraryView>('library')
@@ -136,6 +138,7 @@ function App() {
   const [albums, setAlbums] = useState<Album[]>([])
   const [tags, setTags] = useState<Tag[]>([])
   const [query, setQuery] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
   const [isDragging, setIsDragging] = useState(false)
   const [isTelegramOpen, setIsTelegramOpen] = useState(false)
   const [viewingItem, setViewingItem] = useState<MediaItem | null>(null)
@@ -149,21 +152,42 @@ function App() {
     username: null,
   })
 
+  // Guards against a slow response from an older view overwriting a newer one.
+  const requestSeq = useRef(0)
+
   async function refreshLibrary(showError = true) {
+    const seq = ++requestSeq.current
     try {
       const mediaView = libraryView === 'album' ? 'library' : libraryView
       const [savedMedia, savedTelegramStatus, savedAlbums, savedTags] = await Promise.all([
-        listMedia(mediaView, '', activeAlbumId),
+        listMedia(mediaView, searchTerm, activeAlbumId),
         getTelegramStatus(),
         listAlbums(),
         listTags(),
       ])
-      setItems(savedMedia.map(itemFromApi))
+      if (seq !== requestSeq.current) return
+
+      const remote = savedMedia.map(itemFromApi)
+      setItems((current) => {
+        // A local item exists only in this tab until its upload finishes, and
+        // it carries a temporary id (`name-size-timestamp-uuid`) that never
+        // matches the server UUID. Reconcile on name+size instead, and drop
+        // the placeholder the moment the authoritative row arrives — keeping
+        // it shadowed the real record and pinned the tile at "Queued".
+        const remoteKeys = new Set(remote.map((item) => `${item.name}|${item.size}`))
+        const stillLocalOnly = current.filter((item) => {
+          if (item.uploadStatus !== 'local' && item.uploadStatus !== 'queued') return false
+          return !remoteKeys.has(`${item.name}|${item.size}`)
+        })
+        return [...stillLocalOnly, ...remote]
+      })
       setTelegramStatus(savedTelegramStatus)
       setAlbums(savedAlbums)
       setTags(savedTags)
     } catch (error) {
-      if (showError) setNotice(error instanceof Error ? error.message : 'The local service is not available yet.')
+      if (showError && seq === requestSeq.current) {
+        setNotice(error instanceof Error ? error.message : 'The local service is not available yet.')
+      }
     }
   }
 
@@ -172,26 +196,44 @@ function App() {
     setSelectedIds(new Set())
   }, [libraryView, activeAlbumId])
 
+  // Debounced server-backed search. Typing previously filtered only the
+  // already-loaded page in memory, so matches in descriptions and folder
+  // paths never appeared and nothing beyond the current view was findable.
   useEffect(() => {
-    const hasActiveUploads = items.some((item) => ['queued', 'waiting_for_telegram', 'uploading'].includes(item.uploadStatus))
-    if (!hasActiveUploads) return undefined
+    const handle = window.setTimeout(() => {
+      setSearchTerm(query.trim())
+    }, 250)
+    return () => window.clearTimeout(handle)
+  }, [query])
 
-    const timer = window.setInterval(() => {
-      void refreshLibrary(false)
-    }, 2500)
-    return () => window.clearInterval(timer)
-  }, [items])
+  useEffect(() => {
+    void refreshLibrary(false)
+  }, [searchTerm])
+
+  const hasActiveWork = items.some((item) =>
+    ['queued', 'waiting_for_telegram', 'uploading', 'local'].includes(item.uploadStatus),
+  )
+
+  // Idle libraries still poll, just slowly: a backup finishing in another tab
+  // must eventually show as backed up here.
+  usePolling({
+    onPoll: () => refreshLibrary(false),
+    isActive: hasActiveWork,
+    activeMs: 2000,
+    idleMs: 15000,
+    paused: Boolean(viewingItem) || isTelegramOpen || Boolean(editingItem),
+  })
 
   const filteredItems = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
-
+    // Server search already narrowed the set (name, description, folder path).
+    // This only applies the media-type filter and local ordering, so it can
+    // never hide a row the server deliberately returned.
     return items
       .filter((item) => filter === 'all' || item.type === filter)
-      .filter((item) => !normalizedQuery || item.name.toLowerCase().includes(normalizedQuery))
       .sort((first, second) => sortDirection === 'desc'
         ? second.capturedAt.getTime() - first.capturedAt.getTime()
         : first.capturedAt.getTime() - second.capturedAt.getTime())
-  }, [filter, items, query, sortDirection])
+  }, [filter, items, sortDirection])
 
   const groupedItems = useMemo(() => {
     const groups = new Map<string, { label: string; date: Date; items: MediaItem[] }>()
@@ -402,6 +444,10 @@ function App() {
     setLibraryView(view)
     setActiveAlbumId(albumId)
     setFilter('all')
+    // A view switch keeps the scroll position by default, which lands the user
+    // mid-timeline in a library they have never seen. Ease back to the top;
+    // the reduced-motion query makes this an instant jump.
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const pageTitle = libraryView === 'favorites'
@@ -430,8 +476,9 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className="app-shell" data-collapsed={sidebarCollapsed} data-drawer={drawerOpen}>
+      {drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
+      <aside className="sidebar" data-collapsed={sidebarCollapsed}>
         <div className="brand">
           <div className="brand-mark"><Images size={18} strokeWidth={2.5} /></div>
           <div className="brand-copy"><strong>infinityvault</strong><span>Private memories</span></div>
@@ -439,18 +486,10 @@ function App() {
 
         <div className="sidebar-section">
           <p className="eyebrow">Library</p>
-          <button className={libraryView === 'library' && filter === 'all' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('library')}>
+          <button className={libraryView === 'library' && filter === 'all' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('library')} title="Photos">
             <Images size={18} />
             <span>Photos</span>
             <span className="nav-count">{items.length}</span>
-          </button>
-          <button className="nav-item" type="button" onClick={() => setNotice('Explore will bring places, people, subjects, and memories together.') }>
-            <Sparkles size={18} />
-            <span>Explore</span>
-          </button>
-          <button className="nav-item" type="button" onClick={() => setNotice('Sharing will be available when account sharing is enabled.') }>
-            <Send size={18} />
-            <span>Sharing</span>
           </button>
           <button className={libraryView === 'album' ? 'nav-item active' : 'nav-item'} type="button" onClick={createNewAlbum}>
             <Archive size={18} />
@@ -494,17 +533,32 @@ function App() {
           </div>
           <button className="connect-button" type="button" onClick={() => setIsTelegramOpen(true)}>
             <Send size={16} />
-            Connect Telegram
+            <span>Connect Telegram</span>
+          </button>
+        </div>
+
+        <div className="sidebar-footer">
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          <button
+            className="collapse-button"
+            type="button"
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            onClick={() => setSidebarCollapsed((current) => {
+              window.localStorage.setItem('infinityvault-sidebar', current ? 'expanded' : 'collapsed')
+              return !current
+            })}
+          >
+            {sidebarCollapsed ? <ChevronsRight size={15} /> : <ChevronsLeft size={15} />}
           </button>
         </div>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
-          <button className="mobile-menu icon-button" type="button" aria-label="Open menu"><Menu size={19} /></button>
+          <button className="mobile-menu" type="button" aria-label="Open navigation" onClick={() => setDrawerOpen(true)}><Menu size={19} /></button>
           <div className="topbar-title">
-            <span className="overline">InfinityVault</span>
             <h1>{pageTitle}</h1>
+            <span>{items.length} {items.length === 1 ? 'asset' : 'assets'}</span>
           </div>
           <div className="topbar-actions">
             <label className="search-field">
@@ -521,45 +575,62 @@ function App() {
           </div>
         </header>
 
-        <div className="content-wrap immich-content">
+        <div className="content-wrap">
           <section className="library-heading">
             <div>
               <span className="overline">Library</span>
               <h2>{pageTitle}</h2>
             </div>
-            <div className="library-heading-meta"><span><Cloud size={14} /> {telegramStatus.connected ? 'Backed up privately' : 'Backup not connected'}</span><strong>{items.length} assets</strong></div>
+            <div className="library-heading-meta"><span><Cloud size={14} /> {telegramStatus.connected ? 'Backed up privately' : 'Backup not connected'}</span><strong>{items.length} {items.length === 1 ? 'asset' : 'assets'}</strong></div>
           </section>
 
-          <div className={selectedIds.size > 0 ? 'toolbar selection-toolbar' : 'toolbar immich-toolbar'}>
-            <div className="toolbar-leading">
-              <div className="filter-tabs" role="tablist" aria-label="Media filters">
-              {filters.map((option) => (
-                <button key={option.value} type="button" className={filter === option.value ? 'filter-tab selected' : 'filter-tab'} onClick={() => setFilter(option.value)}>
-                  {option.label}
-                  {option.value === 'all' && <span>{items.length}</span>}
+          {selectedIds.size === 0 && (
+            <div className="toolbar">
+              <div className="toolbar-leading">
+                <div className="filter-tabs" role="tablist" aria-label="Media filters">
+                  {filters.map((option) => (
+                    <button key={option.value} type="button" className={filter === option.value ? 'filter-tab selected' : 'filter-tab'} onClick={() => setFilter(option.value)}>
+                      {option.label}
+                      {option.value === 'all' && <span>{items.length}</span>}
+                    </button>
+                  ))}
+                </div>
+                <span className="results-count">{filteredItems.length} {filteredItems.length === 1 ? 'asset' : 'assets'}</span>
+              </div>
+              <div className="toolbar-tools">
+                <button className="view-mode-button active" type="button" aria-label="Grid view"><LayoutGrid size={15} /></button>
+                <button className="sort-button" type="button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}>
+                  <span>{sortDirection === 'desc' ? 'Newest first' : 'Oldest first'}</span>
+                  <ChevronDown size={15} />
                 </button>
-              ))}
               </div>
-              <span className="results-count">{filteredItems.length} {filteredItems.length === 1 ? 'asset' : 'assets'}</span>
             </div>
-            {selectedIds.size > 0 ? (
+          )}
+
+          {selectedIds.size > 0 && (
+            <div className="selection-toolbar" role="toolbar" aria-label="Selected media actions">
+              <strong>{selectedIds.size} selected</strong>
               <div className="selection-actions">
-                <strong>{selectedIds.size} selected</strong>
-                 {libraryView === 'trash' ? <button type="button" onClick={() => void updateSelectedItems({ trashed: false }, 'Selected media restored.')}><RotateCcw size={15} /> Restore</button> : <>
-                   <button type="button" onClick={() => void updateSelectedItems({ favorite: !selectedItems.every((item) => item.isFavorite) }, 'Favorites updated.')}><Star size={15} /> Favorite</button>
-                   <button type="button" onClick={() => void updateSelectedItems({ archived: true }, 'Selected media archived.')}><Archive size={15} /> Archive</button>
-                   <button type="button" onClick={() => void updateSelectedItems({ trashed: true }, 'Selected media moved to trash.')}><Trash2 size={15} /> Trash</button>
-                 </>}
-                 <button type="button" onClick={addSelectionToAlbum}><Folder size={15} /> Album</button>
-                 <button type="button" onClick={addSelectionTag}><TagIcon size={15} /> Tag</button>
-                 <button type="button" onClick={downloadSelected} disabled={!selectedItems.some((item) => item.downloadUrl)}><Download size={15} /> Download</button>
-                 {libraryView === 'trash' && <button type="button" onClick={() => void deleteSelectedForever()}><Trash2 size={15} /> Delete forever</button>}
-                 <button type="button" onClick={clearSelection}>Clear</button>
+                {libraryView === 'trash' ? (
+                  <button type="button" onClick={() => void updateSelectedItems({ trashed: false }, 'Selected media restored.')}><RotateCcw size={14} /> Restore</button>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => void updateSelectedItems({ favorite: !selectedItems.every((item) => item.isFavorite) }, 'Favorites updated.')}><Star size={14} /> Favorite</button>
+                    <button type="button" onClick={() => void updateSelectedItems({ archived: true }, 'Selected media archived.')}><Archive size={14} /> Archive</button>
+                    <button type="button" onClick={() => void updateSelectedItems({ trashed: true }, 'Selected media moved to trash.')}><Trash2 size={14} /> Trash</button>
+                  </>
+                )}
+                <button type="button" onClick={addSelectionToAlbum}><Folder size={14} /> Album</button>
+                <button type="button" onClick={addSelectionTag}><TagIcon size={14} /> Tag</button>
+                <button type="button" onClick={downloadSelected} disabled={!selectedItems.some((item) => item.downloadUrl)}><Download size={14} /> Download</button>
+                {libraryView === 'trash' && (
+                  <button type="button" className="danger" onClick={() => void deleteSelectedForever()}><Trash2 size={14} /> Delete forever</button>
+                )}
+                <span className="selection-divider" />
+                <button type="button" onClick={clearSelection}>Clear</button>
               </div>
-            ) : (
-              <div className="toolbar-tools"><button className="view-mode-button active" type="button" aria-label="Grid view"><LayoutGrid size={15} /></button><button className="sort-button" type="button" onClick={() => setSortDirection((current) => current === 'desc' ? 'asc' : 'desc')}><span>{sortDirection === 'desc' ? 'Newest first' : 'Oldest first'}</span><ChevronDown size={15} /></button></div>
-            )}
-          </div>
+            </div>
+          )}
 
           {notice && (
             <div className="notice" role="status">
@@ -569,7 +640,7 @@ function App() {
             </div>
           )}
 
-          <div className={isDragging ? 'drop-zone dragging' : 'drop-zone immich-timeline'} onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop}>
+          <div className={isDragging ? 'drop-zone dragging' : 'drop-zone'} onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop}>
             {groupedItems.length > 0 ? groupedItems.map((group) => (
               <section className="date-group" key={dateKey(group.date)}>
                 <div className="date-heading"><h3>{group.label}</h3><span>{group.items.length} {group.items.length === 1 ? 'item' : 'items'}</span></div>
@@ -593,39 +664,74 @@ function App() {
 
 function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView, onFavorite, onEdit }: { item: MediaItem; selected: boolean; onSelect: () => void; onRetry: (item: MediaItem) => void; onConnect: () => void; onView: (item: MediaItem) => void; onFavorite: () => void; onEdit: () => void }) {
   const statusIcon = item.uploadStatus === 'uploaded'
-    ? <Check size={12} />
+    ? <Check size={11} />
     : item.uploadStatus === 'failed'
-      ? <AlertCircle size={12} />
+      ? <AlertCircle size={11} />
       : item.uploadStatus === 'waiting_for_telegram'
-        ? <Send size={12} />
-        : <Cloud size={12} />
+        ? <Send size={11} />
+        : <Cloud size={11} />
+
+  const canView = item.uploadStatus === 'uploaded' && Boolean(item.telegramUrl)
+  const [previewFailed, setPreviewFailed] = useState(false)
 
   return (
     <article className={selected ? 'media-card selected' : 'media-card'}>
-      <div className="media-preview" onClick={() => item.uploadStatus === 'uploaded' && item.telegramUrl ? onView(item) : undefined}>
-        {item.type === 'photo' ? <img src={item.url} alt={item.name} /> : <video src={item.url} muted playsInline preload="metadata" />}
-        {item.type === 'video' && <div className="video-overlay"><Play size={15} fill="currentColor" /></div>}
+      <div
+        className="media-preview"
+        role="button"
+        tabIndex={0}
+        aria-label={`Open ${item.name}`}
+        onClick={() => (canView ? onView(item) : onSelect())}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            if (canView) onView(item)
+            else onSelect()
+          }
+        }}
+      >
+        {previewFailed
+          ? <div className="preview-missing"><AlertCircle size={16} /><span>Preview unavailable</span></div>
+          : item.type === 'photo'
+            ? <img src={item.url} alt={item.name} loading="lazy" onError={() => setPreviewFailed(true)} />
+            : <video src={item.url} muted playsInline preload="metadata" onError={() => setPreviewFailed(true)} />}
+        {item.type === 'video' && <div className="video-overlay"><Play size={14} fill="currentColor" /></div>}
         {item.type === 'video' && item.duration !== undefined && <span className="duration-chip">{formatDuration(item.duration)}</span>}
         {item.uploadStatus !== 'uploaded' && <span className={`backup-chip status-${item.uploadStatus}`}>{statusIcon} {statusLabel(item.uploadStatus)}</span>}
-        <button className={selected ? 'select-button selected' : 'select-button'} type="button" aria-label={selected ? `Deselect ${item.name}` : `Select ${item.name}`} onClick={(event) => { event.stopPropagation(); onSelect() }}>
-          {selected && <Check size={14} strokeWidth={3} />}
+        <button
+          className={selected ? 'select-button selected' : 'select-button'}
+          type="button"
+          aria-label={selected ? `Deselect ${item.name}` : `Select ${item.name}`}
+          onClick={(event) => { event.stopPropagation(); onSelect() }}
+        >
+          {selected && <Check size={12} strokeWidth={3} />}
         </button>
-        <div className="asset-overlay-actions">
-          {item.uploadStatus === 'uploaded' && item.telegramUrl && <button className="view-button" type="button" onClick={(event) => { event.stopPropagation(); onView(item) }}><Eye size={13} /></button>}
-          <button className={item.isFavorite ? 'favorite-button active' : 'favorite-button'} type="button" aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Favorite ${item.name}`} onClick={(event) => { event.stopPropagation(); onFavorite() }}><Star size={14} fill={item.isFavorite ? 'currentColor' : 'none'} /></button>
-          <button className="asset-edit-button" type="button" aria-label={`Edit ${item.name}`} onClick={(event) => { event.stopPropagation(); onEdit() }}><Pencil size={13} /></button>
+        <div className="media-scrim">
+          <button
+            className={item.isFavorite ? 'tile-action active' : 'tile-action'}
+            type="button"
+            aria-label={item.isFavorite ? `Remove ${item.name} from favorites` : `Favorite ${item.name}`}
+            onClick={(event) => { event.stopPropagation(); onFavorite() }}
+          >
+            <Star size={13} fill={item.isFavorite ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            className="tile-action"
+            type="button"
+            aria-label={`Edit details for ${item.name}`}
+            onClick={(event) => { event.stopPropagation(); onEdit() }}
+          >
+            <Pencil size={13} />
+          </button>
         </div>
       </div>
-      <div className="asset-caption">
-        <strong>{formatTime(item.capturedAt)}</strong>
-        <span title={item.name}>{item.name}</span>
-      </div>
-      {(item.uploadStatus === 'failed' || item.uploadStatus === 'local' || item.uploadStatus === 'waiting_for_telegram') && <div className="asset-status-action">
-        {item.uploadStatus === 'failed' && <button className="media-action" type="button" onClick={() => onRetry(item)}><RefreshCw size={12} /> Retry backup</button>}
-        {item.uploadStatus === 'local' && item.file && <button className="media-action" type="button" onClick={() => void onRetry(item)}><RefreshCw size={12} /> Try backup again</button>}
-        {item.uploadStatus === 'waiting_for_telegram' && <button className="media-action" type="button" onClick={onConnect}><Send size={12} /> Connect Telegram</button>}
-        {item.uploadError && <p className="media-error" title={item.uploadError}>{item.uploadError}</p>}
-      </div>}
+      {(item.uploadStatus === 'failed' || item.uploadStatus === 'local' || item.uploadStatus === 'waiting_for_telegram') && (
+        <div className="asset-status-action">
+          {item.uploadStatus === 'failed' && <button className="media-action" type="button" onClick={() => onRetry(item)}><RefreshCw size={11} /> Retry</button>}
+          {item.uploadStatus === 'local' && item.file && <button className="media-action" type="button" onClick={() => void onRetry(item)}><RefreshCw size={11} /> Try again</button>}
+          {item.uploadStatus === 'waiting_for_telegram' && <button className="media-action" type="button" onClick={onConnect}><Send size={11} /> Connect</button>}
+        </div>
+      )}
     </article>
   )
 }

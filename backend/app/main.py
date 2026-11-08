@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from . import db
+from .face_service import FaceService, FaceUnavailable
 from .telegram_service import TelegramService
 
 
@@ -18,7 +19,14 @@ async def lifespan(app: FastAPI):
     service = TelegramService()
     app.state.telegram_service = service
     await service.start()
+
+    faces = FaceService()
+    app.state.face_service = faces
+    await faces.start()
+
     yield
+
+    await faces.stop()
     await service.stop()
 
 
@@ -70,6 +78,10 @@ class TagSelection(BaseModel):
 
 def telegram_service(request: Request) -> TelegramService:
     return request.app.state.telegram_service
+
+
+def face_service(request: Request) -> FaceService:
+    return request.app.state.face_service
 
 
 def friendly_telegram_error(error: Exception) -> str:
@@ -212,6 +224,12 @@ async def upload_media(
         checksum=checksum,
     )
     await telegram_service(request).enqueue(media_id)
+    if media_type == "photo":
+        # Faces are optional and never block the upload response.
+        try:
+            db.enqueue_face_job(media_id, client_id)
+        except Exception:
+            pass
     row = db.get_media(media_id, client_id)
     return db.row_to_media(row)
 
@@ -394,5 +412,131 @@ async def retry_media(
     if not db.retry_media(media_id, client_id):
         raise HTTPException(status_code=404, detail="Media not found")
     await telegram_service(request).enqueue(media_id)
+    if media_type == "photo":
+        # Faces are optional and never block the upload response.
+        try:
+            db.enqueue_face_job(media_id, client_id)
+        except Exception:
+            pass
     row = db.get_media(media_id, client_id)
     return db.row_to_media(row)
+
+
+# ---------------------------------------------------------------------------
+# Face recognition (optional feature)
+# ---------------------------------------------------------------------------
+
+class PersonRename(BaseModel):
+    name: str | None = None
+
+
+class PersonMerge(BaseModel):
+    source_id: str
+    target_id: str
+
+
+@app.get("/api/faces/status")
+def faces_status(request: Request, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+    service = face_service(request)
+    return {**service.status(), **db.face_job_stats(client_id)}
+
+
+@app.post("/api/faces/scan")
+def faces_scan(request: Request, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+    """Queue every photo that has not been analysed yet."""
+    service = face_service(request)
+    if not service.available and service.load_error:
+        raise HTTPException(status_code=503, detail=service.load_error)
+    queued = db.enqueue_all_photos(client_id)
+    return {"queued": queued}
+
+
+@app.post("/api/faces/cluster")
+async def faces_cluster(request: Request, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+    """Group unassigned faces into people."""
+    service = face_service(request)
+    try:
+        return await service.cluster(client_id)
+    except FaceUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.get("/api/people")
+def get_people(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> list[dict]:
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "face_count": row["face_count"],
+            "cover_face_id": row["cover_face_id"],
+            "cover_url": f"/api/faces/{row['cover_face_id']}/thumbnail" if row["cover_face_id"] else None,
+        }
+        for row in db.list_people(client_id)
+    ]
+
+
+@app.get("/api/people/{person_id}/media")
+def person_media(person_id: str, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> list[dict]:
+    return [db.row_to_media(row) for row in db.list_media_by_person(client_id, person_id)]
+
+
+@app.patch("/api/people/{person_id}")
+def rename_person(person_id: str, payload: PersonRename, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+    name = (payload.name or "").strip()[:100] or None
+    row = db.set_person_name(person_id, client_id, name)
+    if not row:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return {"id": row["id"], "name": row["name"], "face_count": row["face_count"]}
+
+
+@app.post("/api/people/merge")
+def merge_people(payload: PersonMerge, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+    if payload.source_id == payload.target_id:
+        raise HTTPException(status_code=400, detail="Choose two different people to merge")
+    moved = db.merge_people(payload.source_id, payload.target_id, client_id)
+    if not moved:
+        raise HTTPException(status_code=404, detail="One of those people was not found")
+    return {"merged_faces": moved}
+
+
+@app.get("/api/faces/{face_id}/thumbnail")
+def face_thumbnail(face_id: str, client_id: str = Header(default="local-user", alias="X-Client-ID")):
+    """Crop a single face from its original for the People grid."""
+    from fastapi.responses import Response
+
+    with db.closing(db.open_db()) as connection:
+        face = connection.execute(
+            "SELECT faces.*, media_items.local_path FROM faces "
+            "JOIN media_items ON media_items.id = faces.media_id "
+            "WHERE faces.id = ? AND faces.client_id = ?",
+            (face_id, client_id),
+        ).fetchone()
+    if not face:
+        raise HTTPException(status_code=404, detail="Face not found")
+
+    try:
+        import cv2  # noqa: PLC0415
+    except ImportError as error:
+        raise HTTPException(status_code=503, detail="Face thumbnails need opencv installed") from error
+
+    image = cv2.imread(str(face["local_path"]))
+    if image is None:
+        raise HTTPException(status_code=404, detail="The original image is no longer available")
+
+    x, y = int(face["bbox_x"]), int(face["bbox_y"])
+    w, h = int(face["bbox_w"]), int(face["bbox_h"])
+    # Pad the crop so faces are not cropped to the jawline.
+    pad = int(max(w, h) * 0.28)
+    ih, iw = image.shape[:2]
+    x1, y1 = max(0, x - pad), max(0, y - pad)
+    x2, y2 = min(iw, x + w + pad), min(ih, y + h + pad)
+    crop = image[y1:y2, x1:x2]
+    if crop.size == 0:
+        raise HTTPException(status_code=404, detail="The face region could not be cropped")
+
+    size = 160
+    crop = cv2.resize(crop, (size, size), interpolation=cv2.INTER_AREA)
+    ok, buffer = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+    if not ok:
+        raise HTTPException(status_code=500, detail="The face thumbnail could not be encoded")
+    return Response(content=buffer.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})

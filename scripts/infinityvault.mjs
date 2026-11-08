@@ -19,7 +19,11 @@ function printHelp() {
 Usage:
   npm run infinityvault -- setup       Configure Telegram and start both services
   npm run infinityvault -- start       Start both services using saved configuration
+  npm run infinityvault -- faces       Install optional face recognition (CPU, ~400 MB)
   npm run infinityvault -- help        Show this help
+
+Face recognition is optional. Run 'npm run infinityvault -- faces' once to
+install it; the app works fully without it.
 
 The setup command asks for Telegram application credentials only when they are
 missing. Telegram phone, verification code, and optional 2FA are entered in
@@ -189,6 +193,20 @@ async function prepareDependencies(skipInstall) {
   }
 }
 
+async function installFaceSupport() {
+  if (!await exists(venvPython)) {
+    console.log('\nCreating the backend Python environment…')
+    run('python3', ['-m', 'venv', path.join(backendDir, '.venv')])
+    run(venvPython, ['-m', 'pip', 'install', '-r', 'requirements.txt'], { cwd: backendDir })
+  }
+  console.log('\nInstalling optional face recognition packages (CPU build)…')
+  console.log('This adds InsightFace, onnxruntime, OpenCV and NumPy.\n')
+  run(venvPython, ['-m', 'pip', 'install', '-r', 'requirements-faces.txt'], { cwd: backendDir })
+  console.log('\nFace recognition installed.')
+  console.log('Start InfinityVault, then use People → Scan library.')
+  console.log('The first scan downloads a ~160 MB model automatically.\n')
+}
+
 function startServices(configPath) {
   const children = []
   const backend = spawn(venvPython, [
@@ -233,6 +251,10 @@ async function main() {
   const command = args[0] ?? 'help'
   if (command === 'help' || command === '--help' || command === '-h') {
     printHelp()
+    return
+  }
+  if (command === 'faces') {
+    await installFaceSupport()
     return
   }
   if (command !== 'setup' && command !== 'start') {

@@ -116,6 +116,53 @@ def init_db() -> None:
                 ON media_items(client_id, capture_time DESC);
             CREATE INDEX IF NOT EXISTS upload_jobs_status
                 ON upload_jobs(status, updated_at);
+
+            /* --- Face recognition (optional feature) -------------------
+               Independent of the Telegram path: media_items stays the
+               asset record and faces only ever reference it. */
+            CREATE TABLE IF NOT EXISTS people (
+                id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                name TEXT,
+                cover_face_id TEXT,
+                face_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS faces (
+                id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                media_id TEXT NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+                person_id TEXT REFERENCES people(id) ON DELETE SET NULL,
+                bbox_x REAL NOT NULL,
+                bbox_y REAL NOT NULL,
+                bbox_w REAL NOT NULL,
+                bbox_h REAL NOT NULL,
+                det_score REAL NOT NULL,
+                embedding BLOB NOT NULL,
+                embedding_dim INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS face_jobs (
+                id TEXT PRIMARY KEY,
+                media_id TEXT NOT NULL UNIQUE REFERENCES media_items(id) ON DELETE CASCADE,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS faces_client_media
+                ON faces(client_id, media_id);
+            CREATE INDEX IF NOT EXISTS faces_person
+                ON faces(person_id);
+            CREATE INDEX IF NOT EXISTS face_jobs_status
+                ON face_jobs(status, updated_at);
+            CREATE INDEX IF NOT EXISTS people_client
+                ON people(client_id, face_count DESC);
             """
         )
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(media_items)")}
@@ -581,4 +628,259 @@ def row_to_media(row: sqlite3.Row, api_prefix: str = "/api") -> dict[str, Any]:
         "upload_status": row["upload_status"],
         "upload_error": row["upload_error"],
         "telegram_message_id": row["telegram_message_id"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Face recognition
+# ---------------------------------------------------------------------------
+
+def enqueue_face_job(media_id: str, client_id: str) -> None:
+    """Queue a photo for face analysis. Safe to call repeatedly."""
+    now = utc_now()
+    with closing(open_db()) as connection:
+        connection.execute(
+            """
+            INSERT INTO face_jobs (id, media_id, status, created_at, updated_at)
+            VALUES (?, ?, 'queued', ?, ?)
+            ON CONFLICT(media_id) DO UPDATE SET
+                status = 'queued',
+                last_error = NULL,
+                updated_at = excluded.updated_at
+            """,
+            (str(uuid4()), media_id, now, now),
+        )
+        connection.commit()
+
+
+def enqueue_all_photos(client_id: str) -> int:
+    """Queue every photo that has no faces recorded yet."""
+    now = utc_now()
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            """
+            SELECT id FROM media_items
+            WHERE client_id = ?
+              AND media_type = 'photo'
+              AND trashed_at IS NULL
+              AND id NOT IN (SELECT media_id FROM faces)
+              AND id NOT IN (SELECT media_id FROM face_jobs WHERE status = 'queued')
+            """,
+            (client_id,),
+        ).fetchall()
+        for row in rows:
+            connection.execute(
+                """
+                INSERT INTO face_jobs (id, media_id, status, created_at, updated_at)
+                VALUES (?, ?, 'queued', ?, ?)
+                ON CONFLICT(media_id) DO UPDATE SET
+                    status = 'queued', last_error = NULL, updated_at = excluded.updated_at
+                """,
+                (str(uuid4()), row["id"], now, now),
+            )
+        connection.commit()
+        return len(rows)
+
+
+def next_face_job() -> sqlite3.Row | None:
+    with closing(open_db()) as connection:
+        return connection.execute(
+            """
+            SELECT face_jobs.*, media_items.local_path, media_items.media_type,
+                   media_items.client_id, media_items.original_name
+            FROM face_jobs
+            JOIN media_items ON media_items.id = face_jobs.media_id
+            WHERE face_jobs.status = 'queued'
+            ORDER BY face_jobs.created_at
+            LIMIT 1
+            """
+        ).fetchone()
+
+
+def mark_face_job_running(media_id: str) -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE face_jobs SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE media_id = ?",
+            (utc_now(), media_id),
+        )
+        connection.commit()
+
+
+def mark_face_job_done(media_id: str) -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE face_jobs SET status = 'done', last_error = NULL, updated_at = ? WHERE media_id = ?",
+            (utc_now(), media_id),
+        )
+        connection.commit()
+
+
+def mark_face_job_failed(media_id: str, error: str) -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE face_jobs SET status = 'failed', last_error = ?, updated_at = ? WHERE media_id = ?",
+            (error[:300], utc_now(), media_id),
+        )
+        connection.commit()
+
+
+def reset_interrupted_face_jobs() -> None:
+    """Anything left 'running' after a crash goes back to the queue."""
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE face_jobs SET status = 'queued', updated_at = ? WHERE status = 'running'",
+            (utc_now(),),
+        )
+        connection.commit()
+
+
+def replace_faces_for_media(client_id: str, media_id: str, faces: list[dict[str, Any]]) -> None:
+    """Replace all detections for one asset. Embeddings stored as float32 BLOBs."""
+    now = utc_now()
+    with closing(open_db()) as connection:
+        connection.execute("DELETE FROM faces WHERE media_id = ?", (media_id,))
+        for face in faces:
+            connection.execute(
+                """
+                INSERT INTO faces
+                    (id, client_id, media_id, person_id, bbox_x, bbox_y, bbox_w, bbox_h,
+                     det_score, embedding, embedding_dim, created_at)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()), client_id, media_id,
+                    face["bbox_x"], face["bbox_y"], face["bbox_w"], face["bbox_h"],
+                    face["det_score"], face["embedding"], face["embedding_dim"], now,
+                ),
+            )
+        connection.commit()
+
+
+def list_unassigned_faces(client_id: str) -> list[sqlite3.Row]:
+    with closing(open_db()) as connection:
+        return list(connection.execute(
+            "SELECT * FROM faces WHERE client_id = ? AND person_id IS NULL ORDER BY created_at",
+            (client_id,),
+        ).fetchall())
+
+
+def list_people(client_id: str) -> list[sqlite3.Row]:
+    with closing(open_db()) as connection:
+        return list(connection.execute(
+            "SELECT * FROM people WHERE client_id = ? ORDER BY face_count DESC, created_at",
+            (client_id,),
+        ).fetchall())
+
+
+def create_person(client_id: str, name: str | None, cover_face_id: str | None) -> sqlite3.Row:
+    person_id = str(uuid4())
+    now = utc_now()
+    with closing(open_db()) as connection:
+        connection.execute(
+            "INSERT INTO people (id, client_id, name, cover_face_id, face_count, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, 0, ?, ?)",
+            (person_id, client_id, name, cover_face_id, now, now),
+        )
+        connection.commit()
+        return connection.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
+
+
+def assign_face_to_person(face_id: str, person_id: str) -> None:
+    with closing(open_db()) as connection:
+        connection.execute("UPDATE faces SET person_id = ? WHERE id = ?", (person_id, face_id))
+        connection.execute(
+            """
+            UPDATE people SET face_count =
+                (SELECT COUNT(*) FROM faces WHERE person_id = people.id), updated_at = ?
+            WHERE id = ?
+            """,
+            (utc_now(), person_id),
+        )
+        connection.commit()
+
+
+def set_person_name(person_id: str, client_id: str, name: str | None) -> sqlite3.Row | None:
+    with closing(open_db()) as connection:
+        result = connection.execute(
+            "UPDATE people SET name = ?, updated_at = ? WHERE id = ? AND client_id = ?",
+            (name, utc_now(), person_id, client_id),
+        )
+        connection.commit()
+        if result.rowcount == 0:
+            return None
+        return connection.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
+
+
+def merge_people(source_id: str, target_id: str, client_id: str) -> int:
+    """Move every face from source into target, then delete source."""
+    with closing(open_db()) as connection:
+        valid = connection.execute(
+            "SELECT id FROM people WHERE id IN (?, ?) AND client_id = ?", (source_id, target_id, client_id)
+        ).fetchall()
+        if len(valid) != 2:
+            return 0
+        moved = connection.execute(
+            "UPDATE faces SET person_id = ? WHERE person_id = ?", (target_id, source_id)
+        ).rowcount
+        connection.execute(
+            "UPDATE people SET face_count = (SELECT COUNT(*) FROM faces WHERE person_id = ?), updated_at = ? WHERE id = ?",
+            (target_id, utc_now(), target_id),
+        )
+        connection.execute("DELETE FROM people WHERE id = ?", (source_id,))
+        connection.commit()
+        return int(moved)
+
+
+def face_job_stats(client_id: str) -> dict[str, int]:
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            """
+            SELECT face_jobs.status AS status, COUNT(*) AS total
+            FROM face_jobs JOIN media_items ON media_items.id = face_jobs.media_id
+            WHERE media_items.client_id = ?
+            GROUP BY face_jobs.status
+            """,
+            (client_id,),
+        ).fetchall()
+        counts = {row["status"]: row["total"] for row in rows}
+        faces = connection.execute(
+            "SELECT COUNT(*) FROM faces WHERE client_id = ?", (client_id,)
+        ).fetchone()[0]
+        people = connection.execute(
+            "SELECT COUNT(*) FROM people WHERE client_id = ?", (client_id,)
+        ).fetchone()[0]
+    return {
+        "queued": counts.get("queued", 0),
+        "running": counts.get("running", 0),
+        "done": counts.get("done", 0),
+        "failed": counts.get("failed", 0),
+        "faces": faces,
+        "people": people,
+    }
+
+
+def list_media_by_person(client_id: str, person_id: str) -> list[sqlite3.Row]:
+    with closing(open_db()) as connection:
+        return list(connection.execute(
+            """
+            SELECT DISTINCT media_items.* FROM media_items
+            JOIN faces ON faces.media_id = media_items.id
+            WHERE media_items.client_id = ? AND faces.person_id = ?
+              AND media_items.trashed_at IS NULL
+            ORDER BY media_items.capture_time DESC
+            """,
+            (client_id, person_id),
+        ).fetchall())
+
+
+def row_to_face(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "media_id": row["media_id"],
+        "person_id": row["person_id"],
+        "box": {
+            "x": row["bbox_x"], "y": row["bbox_y"],
+            "w": row["bbox_w"], "h": row["bbox_h"],
+        },
+        "det_score": row["det_score"],
     }

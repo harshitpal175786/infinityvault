@@ -1,0 +1,15 @@
+# Optional face-recognition dependencies.
+#
+# Install only if you want People/face features:
+#     backend/.venv/bin/pip install -r backend/requirements-faces.txt
+#
+# Everything runs on CPU. onnxruntime picks Apple CoreML, CUDA, or plain CPU
+# automatically at runtime, so the same wheels work on macOS, Windows and
+# Linux with no rebuild.
+#
+# Keep these out of the main requirements.txt: a base install stays ~40 MB
+# instead of ~400 MB, and the app runs fine with faces disabled.
+insightface>=0.7.3,<3
+onnxruntime>=1.17
+opencv-python-headless>=4.9
+numpy>=1.24
