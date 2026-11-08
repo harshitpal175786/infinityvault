@@ -3,6 +3,47 @@ import type { MediaItem, UploadStatus } from './types'
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000'
 const CLIENT_ID_KEY = 'infinityvault-client-id'
 const LEGACY_CLIENT_ID_KEY = 'chronicle-client-id'
+const ACCESS_TOKEN_KEY = 'infinityvault-access-token'
+
+let accessToken: string | null = readStoredToken()
+let onUnauthorized: (() => void) | null = null
+
+function readStoredToken(): string | null {
+  try {
+    return window.localStorage.getItem(ACCESS_TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function getAccessToken(): string | null {
+  return accessToken
+}
+
+export function setAccessToken(token: string | null): void {
+  accessToken = token && token.trim() ? token.trim() : null
+  try {
+    if (accessToken) window.localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+    else window.localStorage.removeItem(ACCESS_TOKEN_KEY)
+  } catch {
+    /* storage can be unavailable in private modes; the in-memory copy still works */
+  }
+}
+
+/** Let the app show a token prompt whenever the API rejects a request. */
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  onUnauthorized = handler
+}
+
+export type AuthStatus = {
+  required: boolean
+  configured: boolean
+  problem: string | null
+}
+
+export function getAuthStatus(): Promise<AuthStatus> {
+  return request<AuthStatus>('/api/auth/status')
+}
 
 export type TelegramStatus = {
   configured: boolean
@@ -79,16 +120,27 @@ export const clientId = getClientId()
 
 export function mediaUrl(path: string): string {
   const separator = path.includes('?') ? '&' : '?'
-  return `${path.startsWith('http') ? path : `${API_BASE}${path}`}${separator}client_id=${encodeURIComponent(clientId)}`
+  const base = `${path.startsWith('http') ? path : `${API_BASE}${path}`}${separator}client_id=${encodeURIComponent(clientId)}`
+  // <img>, <video> and download anchors cannot set an Authorization header, so
+  // the token has to travel in the query string here. Same reason as client_id.
+  return accessToken ? `${base}&access_token=${encodeURIComponent(accessToken)}` : base
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   headers.set('X-Client-ID', clientId)
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
   if (!(init?.body instanceof FormData)) headers.set('Content-Type', 'application/json')
 
   const response = await fetch(`${API_BASE}${path}`, { ...init, headers })
   const payload = await response.json().catch(() => ({}))
+  if (response.status === 401) {
+    // Only clear a token that was actually rejected; the prompt then asks for
+    // a new one instead of silently retrying with the same bad value.
+    if (accessToken) setAccessToken(null)
+    onUnauthorized?.()
+    throw new Error(payload.detail ?? 'This request needs the InfinityVault access token.')
+  }
   if (!response.ok) {
     throw new Error(payload.detail ?? 'The server could not complete that request.')
   }

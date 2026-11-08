@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   Archive,
@@ -38,7 +38,8 @@ import { useTheme } from './hooks/useTheme'
 import { usePolling } from './hooks/usePolling'
 import { ThemeToggle } from './components/ThemeToggle'
 import { UtilitiesPage } from './components/UtilitiesPage'
-import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getTelegramStatus, listAlbums, listMedia, listMediaPage, listTags, mediaUrl, retryMedia, updateMedia, startTelegramAuth, uploadMedia, verifyTelegramAuth } from './api'
+import { TokenGate } from './components/TokenGate'
+import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listMedia, listMediaPage, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
 import type { Album, ApiMedia, Tag, TelegramAuthResponse, TelegramStatus } from './api'
 import type { MediaItem, MediaType, UploadStatus } from './types'
 
@@ -133,6 +134,9 @@ function statusLabel(status: UploadStatus): string {
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { theme, toggleTheme } = useTheme()
+  const [authRejected, setAuthRejected] = useState(false)
+  const [authReady, setAuthReady] = useState(false)
+  const [authChecking, setAuthChecking] = useState(false)
   const [items, setItems] = useState<MediaItem[]>([])
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem('infinityvault-sidebar') === 'collapsed')
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -245,12 +249,51 @@ function App() {
     }
   }
 
+  // Ask once whether this instance is protected. If it is not (no token
+  // configured) we must not block the user behind a prompt they cannot satisfy
+  // -- but if a stored token gets rejected later, the gate reappears.
   useEffect(() => {
+    let cancelled = false
+    void getAuthStatus()
+      .then((status) => {
+        if (cancelled) return
+        // An unprotected instance never shows the gate. A protected one always
+        // does until a token has been proven, so a stale token cannot slip past.
+        if (!status.required) {
+          setAuthReady(true)
+          return
+        }
+        const stored = getAccessToken()
+        if (!stored) return
+        // A stored token still has to be proven; otherwise a rotated token
+        // would render the shell and then fail on every request.
+        void listMediaPage('library', '', undefined, undefined, 1)
+          .then(() => setAuthReady(true))
+          .catch(() => setAuthRejected(true))
+      })
+      .catch(() => {
+        if (!cancelled) setAuthReady(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setAuthRejected(true)
+      setAuthReady(false)
+    })
+    return () => setUnauthorizedHandler(null)
+  }, [])
+
+  useEffect(() => {
+    if (!authReady) return
     loadedPagesRef.current = 1
     setNextCursor(null)
     void refreshLibrary()
     setSelectedIds(new Set())
-  }, [libraryView, activeAlbumId])
+  }, [libraryView, activeAlbumId, authReady])
 
   // Debounced server-backed search. Typing previously filtered only the
   // already-loaded page in memory, so matches in descriptions and folder
@@ -535,6 +578,34 @@ function App() {
     })
     setNotice(`${selectedItems.filter((item) => item.downloadUrl).length} original ${selectedItems.length === 1 ? 'file' : 'files'} queued for download.`)
     clearSelection()
+  }
+
+  // The API tells us on the first rejected request that it needs a token.
+  if (!authReady) {
+    return (
+      <TokenGate
+        rejected={authRejected}
+        checking={authChecking}
+        onSubmit={() => {
+          // Prove the token works before showing the app. Rendering the shell
+          // optimistically would let a wrong token appear to succeed.
+          setAuthChecking(true)
+          void getAuthStatus()
+            .catch(() => null)
+            .then(async () => {
+              try {
+                await listMediaPage('library', '', undefined, undefined, 1)
+                setAuthRejected(false)
+                setAuthReady(true)
+              } catch {
+                setAuthRejected(true)
+              } finally {
+                setAuthChecking(false)
+              }
+            })
+        }}
+      />
+    )
   }
 
   return (

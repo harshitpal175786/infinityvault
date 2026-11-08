@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -8,10 +9,10 @@ from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import db
+from . import auth, db
 from .face_service import FaceService, FaceUnavailable
 from .thumbnail_service import ThumbnailService
 
@@ -29,6 +30,17 @@ async def lifespan(app: FastAPI):
     service = TelegramService()
     app.state.telegram_service = service
     await service.start()
+
+    # Access control. Read from the private env file so a launcher that does
+    # not export the variable still works.
+    env_file = Path(os.getenv("INFINITYVAULT_ENV_FILE", Path.home() / ".config" / "infinityvault" / ".env"))
+    token = auth.load_token(env_file)
+    app.state.access_token = token
+    problem = auth.validate_configuration(token)
+    if problem:
+        logger.warning("Access control: %s", problem)
+    else:
+        logger.info("Access control: token required for /api requests")
 
     # Repair stale/absolute paths before any service reads them.
     try:
@@ -72,6 +84,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def require_access_token(request: Request, call_next):
+    """Reject unauthenticated API access.
+
+    A single-owner vault needs "is this the owner?", not identity. See
+    app/auth.py for why OAuth was rejected.
+
+    Escape hatch: while no token is configured the API stays open and reports
+    itself as unsecured, so a user who has never run `token` is not locked out
+    of their own library. /api/auth/status always tells the truth about this.
+    """
+    path = request.url.path
+    if request.method == "OPTIONS" or path in auth.PUBLIC_PATHS or not path.startswith("/api"):
+        return await call_next(request)
+
+    expected = getattr(app.state, "access_token", None)
+    if not expected:
+        # Unconfigured: allow, but every response advertises the state.
+        response = await call_next(request)
+        response.headers["X-InfinityVault-Security"] = "unsecured"
+        return response
+
+    provided = auth.extract_token(dict(request.headers), request.query_params.get("access_token"))
+    if not auth.token_is_valid(provided, expected):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "This request needs the InfinityVault access token."},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
 
 
 class TelegramStartRequest(BaseModel):
@@ -141,8 +185,36 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# This vault has exactly one owner, so the client id is server state rather
+# than a value the caller gets to choose. Leaving a "local-user" default in
+# place meant an authenticated request with no header silently read whatever
+# rows were stored under that id -- the request still succeeded, which hid the
+# mistake. Requests must now name the id explicitly.
+def resolve_client_id(client_id: str | None, query_client_id: str | None = None) -> str:
+    resolved = query_client_id or client_id
+    if not resolved:
+        raise HTTPException(
+            status_code=400,
+            detail="A client id is required (X-Client-ID header or ?client_id= query parameter).",
+        )
+    return resolved
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request) -> dict:
+    """Whether this instance requires a token. Public by design: the client
+    must be able to learn that it needs one before it can send one."""
+    token = getattr(request.app.state, "access_token", None)
+    return {
+        "required": bool(token),
+        "configured": bool(token),
+        "problem": auth.validate_configuration(token),
+    }
+
+
 @app.get("/api/telegram/status")
-def telegram_status(request: Request, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+def telegram_status(request: Request, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
+    client_id = resolve_client_id(client_id)
     service = telegram_service(request)
     connection = db.get_telegram_connection(client_id)
     return {
@@ -157,8 +229,9 @@ def telegram_status(request: Request, client_id: str = Header(default="local-use
 async def start_telegram_auth(
     payload: TelegramStartRequest,
     request: Request,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict:
+    client_id = resolve_client_id(client_id)
     try:
         return await telegram_service(request).request_code(client_id, payload.phone_number.strip())
     except (ValueError, RuntimeError) as error:
@@ -171,8 +244,9 @@ async def start_telegram_auth(
 async def verify_telegram_auth(
     payload: TelegramVerifyRequest,
     request: Request,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict:
+    client_id = resolve_client_id(client_id)
     try:
         return await telegram_service(request).verify_code(client_id, payload.code, payload.password)
     except ValueError as error:
@@ -184,8 +258,9 @@ async def verify_telegram_auth(
 @app.post("/api/telegram/disconnect")
 async def disconnect_telegram(
     request: Request,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict[str, bool]:
+    client_id = resolve_client_id(client_id)
     await telegram_service(request).disconnect(client_id)
     return {"connected": False}
 
@@ -197,7 +272,8 @@ def get_media(
     album_id: str | None = Query(default=None),
     cursor: str | None = Query(default=None),
     limit: int | None = Query(default=None),
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> Any:
     """List media, newest first.
 
@@ -205,6 +281,8 @@ def get_media(
     still receives a plain array. Passing either switches the response to
     `{items, next_cursor}`, so the two shapes never mix.
     """
+
+    client_id = resolve_client_id(client_id, query_client_id)
     if cursor is None and limit is None:
         rows = db.list_media(client_id, view=view, query=search, album_id=album_id)
         return [db.row_to_media(row) for row in rows]
@@ -234,8 +312,9 @@ async def upload_media(
     width: int | None = Form(default=None),
     height: int | None = Form(default=None),
     duration: float | None = Form(default=None),
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict:
+    client_id = resolve_client_id(client_id)
     if media_type not in {"photo", "video"}:
         raise HTTPException(status_code=400, detail="Only photos and videos can be uploaded")
     try:
@@ -306,8 +385,9 @@ async def upload_media(
 def update_media(
     media_id: str,
     payload: MediaUpdate,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict:
+    client_id = resolve_client_id(client_id)
     if payload.captured_at is not None:
         try:
             datetime.fromisoformat(payload.captured_at.replace("Z", "+00:00"))
@@ -332,8 +412,9 @@ def update_media(
 async def delete_media(
     media_id: str,
     request: Request,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict[str, bool]:
+    client_id = resolve_client_id(client_id)
     row = db.get_media(media_id, client_id)
     if not row:
         raise HTTPException(status_code=404, detail="Media not found")
@@ -352,12 +433,14 @@ async def delete_media(
 
 
 @app.get("/api/albums")
-def get_albums(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> list[dict]:
+def get_albums(client_id: str | None = Header(default=None, alias="X-Client-ID")) -> list[dict]:
+    client_id = resolve_client_id(client_id)
     return [dict(row) for row in db.list_albums(client_id)]
 
 
 @app.post("/api/albums")
-def post_album(payload: AlbumCreate, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+def post_album(payload: AlbumCreate, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
+    client_id = resolve_client_id(client_id)
     if not payload.name.strip():
         raise HTTPException(status_code=400, detail="Album name is required")
     try:
@@ -369,7 +452,8 @@ def post_album(payload: AlbumCreate, client_id: str = Header(default="local-user
 
 
 @app.delete("/api/albums/{album_id}")
-def remove_album(album_id: str, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict[str, bool]:
+def remove_album(album_id: str, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict[str, bool]:
+    client_id = resolve_client_id(client_id)
     if not db.delete_album(album_id, client_id):
         raise HTTPException(status_code=404, detail="Album not found")
     return {"deleted": True}
@@ -379,8 +463,9 @@ def remove_album(album_id: str, client_id: str = Header(default="local-user", al
 def add_album_media(
     album_id: str,
     payload: MediaSelection,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict[str, int]:
+    client_id = resolve_client_id(client_id)
     added = db.add_media_to_album(album_id, payload.media_ids, client_id)
     if added < 0:
         raise HTTPException(status_code=404, detail="Album not found")
@@ -388,12 +473,14 @@ def add_album_media(
 
 
 @app.get("/api/tags")
-def get_tags(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> list[dict]:
+def get_tags(client_id: str | None = Header(default=None, alias="X-Client-ID")) -> list[dict]:
+    client_id = resolve_client_id(client_id)
     return [dict(row) for row in db.list_tags(client_id)]
 
 
 @app.post("/api/tags")
-def post_tag(payload: TagCreate, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+def post_tag(payload: TagCreate, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
+    client_id = resolve_client_id(client_id)
     if not payload.name.strip():
         raise HTTPException(status_code=400, detail="Tag name is required")
     return dict(db.create_tag(client_id, payload.name))
@@ -403,8 +490,9 @@ def post_tag(payload: TagCreate, client_id: str = Header(default="local-user", a
 def add_tag_media(
     tag_id: str,
     payload: TagSelection,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict[str, int]:
+    client_id = resolve_client_id(client_id)
     added = db.add_tag_to_media(tag_id, payload.media_ids, client_id)
     if added < 0:
         raise HTTPException(status_code=404, detail="Tag not found")
@@ -414,7 +502,7 @@ def add_tag_media(
 @app.get("/api/media/{media_id}/thumbnail")
 def media_thumbnail(
     media_id: str,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
 ):
     """Small cached WebP for the grid.
@@ -423,6 +511,8 @@ def media_thumbnail(
     a freshly imported photo is never a broken tile. The `thumb_state` field
     tells the UI whether it is looking at a real thumbnail.
     """
+
+    client_id = resolve_client_id(client_id)
     # <img>/<video> cannot send X-Client-ID, so the query param is the normal
     # path for these two endpoints.
     effective_client_id = query_client_id or client_id
@@ -465,10 +555,12 @@ def media_thumbnail(
 @app.get("/api/media/{media_id}/micro-thumbnail")
 def media_micro_thumbnail(
     media_id: str,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
 ):
     """Tiny blurred placeholder for progressive tile loading."""
+
+    client_id = resolve_client_id(client_id)
     effective_client_id = query_client_id or client_id
     row = db.get_media(media_id, effective_client_id)
     if not row:
@@ -487,13 +579,16 @@ def media_micro_thumbnail(
 
 
 @app.post("/api/thumbnails/backfill")
-def thumbnails_backfill(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+def thumbnails_backfill(client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
     """Queue every asset that has no thumbnail yet."""
+
+    client_id = resolve_client_id(client_id)
     return {"queued": db.enqueue_all_thumbnails(client_id)}
 
 
 @app.get("/api/thumbnails/status")
-def thumbnails_status(request: Request, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+def thumbnails_status(request: Request, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
+    client_id = resolve_client_id(client_id)
     return {**thumbnail_service(request).status(), **db.thumbnail_job_stats(client_id)}
 
 
@@ -503,7 +598,8 @@ def media_content(
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> FileResponse:
-    effective_client_id = query_client_id or client_id or "local-user"
+    client_id = resolve_client_id(client_id)
+    effective_client_id = resolve_client_id(client_id, query_client_id)
     row = db.get_media(media_id, effective_client_id)
     if not row:
         raise HTTPException(status_code=404, detail="Media not found")
@@ -520,7 +616,8 @@ async def telegram_media_content(
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> FileResponse:
-    effective_client_id = query_client_id or client_id or "local-user"
+    client_id = resolve_client_id(client_id)
+    effective_client_id = resolve_client_id(client_id, query_client_id)
     service = telegram_service(request)
     try:
         path = await service.telegram_media_path(effective_client_id, media_id)
@@ -542,7 +639,8 @@ async def telegram_media_download(
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> FileResponse:
-    effective_client_id = query_client_id or client_id or "local-user"
+    client_id = resolve_client_id(client_id)
+    effective_client_id = resolve_client_id(client_id, query_client_id)
     service = telegram_service(request)
     try:
         path = await service.telegram_media_path(effective_client_id, media_id)
@@ -561,8 +659,9 @@ async def telegram_media_download(
 async def retry_media(
     media_id: str,
     request: Request,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict:
+    client_id = resolve_client_id(client_id)
     if not db.retry_media(media_id, client_id):
         raise HTTPException(status_code=404, detail="Media not found")
     # Thumbnails are generated in the background for photos and videos alike.
@@ -596,14 +695,17 @@ class PersonMerge(BaseModel):
 
 
 @app.get("/api/faces/status")
-def faces_status(request: Request, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+def faces_status(request: Request, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
+    client_id = resolve_client_id(client_id)
     service = face_service(request)
     return {**service.status(), **db.face_job_stats(client_id)}
 
 
 @app.post("/api/faces/scan")
-def faces_scan(request: Request, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+def faces_scan(request: Request, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
     """Queue every photo that has not been analysed yet."""
+
+    client_id = resolve_client_id(client_id)
     service = face_service(request)
     if not service.available and service.load_error:
         raise HTTPException(status_code=503, detail=service.load_error)
@@ -612,8 +714,10 @@ def faces_scan(request: Request, client_id: str = Header(default="local-user", a
 
 
 @app.post("/api/faces/cluster")
-async def faces_cluster(request: Request, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+async def faces_cluster(request: Request, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
     """Group unassigned faces into people."""
+
+    client_id = resolve_client_id(client_id)
     service = face_service(request)
     try:
         return await service.cluster(client_id)
@@ -622,7 +726,8 @@ async def faces_cluster(request: Request, client_id: str = Header(default="local
 
 
 @app.get("/api/people")
-def get_people(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> list[dict]:
+def get_people(client_id: str | None = Header(default=None, alias="X-Client-ID")) -> list[dict]:
+    client_id = resolve_client_id(client_id)
     return [
         {
             "id": row["id"],
@@ -636,12 +741,14 @@ def get_people(client_id: str = Header(default="local-user", alias="X-Client-ID"
 
 
 @app.get("/api/people/{person_id}/media")
-def person_media(person_id: str, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> list[dict]:
+def person_media(person_id: str, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> list[dict]:
+    client_id = resolve_client_id(client_id)
     return [db.row_to_media(row) for row in db.list_media_by_person(client_id, person_id)]
 
 
 @app.patch("/api/people/{person_id}")
-def rename_person(person_id: str, payload: PersonRename, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+def rename_person(person_id: str, payload: PersonRename, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
+    client_id = resolve_client_id(client_id)
     name = (payload.name or "").strip()[:100] or None
     row = db.set_person_name(person_id, client_id, name)
     if not row:
@@ -650,7 +757,8 @@ def rename_person(person_id: str, payload: PersonRename, client_id: str = Header
 
 
 @app.post("/api/people/merge")
-def merge_people(payload: PersonMerge, client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+def merge_people(payload: PersonMerge, client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
+    client_id = resolve_client_id(client_id)
     if payload.source_id == payload.target_id:
         raise HTTPException(status_code=400, detail="Choose two different people to merge")
     moved = db.merge_people(payload.source_id, payload.target_id, client_id)
@@ -663,9 +771,11 @@ def merge_people(payload: PersonMerge, client_id: str = Header(default="local-us
 async def integrity_check(
     request: Request,
     limit: int = Query(default=500, ge=1, le=5000),
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict:
     """Verify that backed-up originals still exist in Telegram."""
+
+    client_id = resolve_client_id(client_id)
     try:
         return await telegram_service(request).check_integrity(client_id, limit=limit)
     except ValueError as error:
@@ -674,20 +784,23 @@ async def integrity_check(
 
 @app.get("/api/backup/status")
 async def backup_status(
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> dict:
     """How far the local index has drifted from the last Telegram snapshot."""
-    return db.backup_state(client_id)
+    return db.backup_state(resolve_client_id(client_id, query_client_id))
 
 
 @app.post("/api/backup/metadata")
 async def backup_metadata(
     request: Request,
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> dict:
     """Upload a JSON snapshot of the local index to Telegram."""
+    resolved = resolve_client_id(client_id, query_client_id)
     try:
-        return await telegram_service(request).backup_metadata(client_id)
+        return await telegram_service(request).backup_metadata(resolved)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
@@ -696,11 +809,13 @@ async def backup_metadata(
 async def restore_scan(
     request: Request,
     limit: int = Query(default=3000, ge=1, le=20000),
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> dict:
     """Inspect Saved Messages for InfinityVault backups without changing anything."""
+    resolved = resolve_client_id(client_id, query_client_id)
     try:
-        result = await telegram_service(request).scan_for_restore(client_id, limit=limit)
+        result = await telegram_service(request).scan_for_restore(resolved, limit=limit)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     # The per-item list can be large; the UI only needs the counts.
@@ -715,29 +830,36 @@ async def restore_scan(
 async def restore_apply(
     request: Request,
     limit: int = Query(default=3000, ge=1, le=20000),
-    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> dict:
     """Rebuild the local index from Telegram. Idempotent, never deletes."""
+    resolved = resolve_client_id(client_id, query_client_id)
     try:
-        return await telegram_service(request).apply_restore(client_id, limit=limit)
+        return await telegram_service(request).apply_restore(resolved, limit=limit)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.get("/api/integrity/status")
-def integrity_status(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> dict:
+def integrity_status(client_id: str | None = Header(default=None, alias="X-Client-ID")) -> dict:
+    client_id = resolve_client_id(client_id)
     return db.integrity_summary(client_id)
 
 
 @app.get("/api/integrity/broken")
-def integrity_broken(client_id: str = Header(default="local-user", alias="X-Client-ID")) -> list[dict]:
+def integrity_broken(client_id: str | None = Header(default=None, alias="X-Client-ID")) -> list[dict]:
     """Assets whose Telegram original is gone, so the UI can offer a re-upload."""
+
+    client_id = resolve_client_id(client_id)
     return [db.row_to_media(row) for row in db.list_broken_media(client_id)]
 
 
 @app.get("/api/faces/{face_id}/thumbnail")
-def face_thumbnail(face_id: str, client_id: str = Header(default="local-user", alias="X-Client-ID")):
+def face_thumbnail(face_id: str, client_id: str | None = Header(default=None, alias="X-Client-ID")):
     """Crop a single face from its original for the People grid."""
+
+    client_id = resolve_client_id(client_id)
     from fastapi.responses import Response
 
     with db.closing(db.open_db()) as connection:

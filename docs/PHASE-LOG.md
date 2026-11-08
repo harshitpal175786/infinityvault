@@ -6,7 +6,7 @@
 
 **Plan:** `docs/PRD-PHASES.md`
 **Baseline commit:** `d68fac7`
-**Current phase:** Phase 3 (identity/auth) next — 2.3 disaster recovery done
+**Current phase:** Phase 4 (People UI) next — Phase 3 identity/auth done
 
 ---
 
@@ -22,6 +22,7 @@
 | 2.2 Integrity check | ✅ | — | Utilities page |
 | 2.3 Disaster recovery | ✅ | — | Backup + restore verified |
 | 2.4 Auto-backup | ✅ | — | Throttled by change count |
+| 3 Auth (token) | ✅ | — | Bearer token, verified end to end |
 | 3. Identity / auth | ⬜ Not started | — | Deploy gate |
 | 3.1 Token auth | ⬜ | — | |
 | 3.2 Single-user cleanup | ⬜ | — | |
@@ -261,6 +262,46 @@ _Log:_
 ---
 
 ## Phase 3 — Identity
+
+- [x] `auth.py`: token load/generate/validate, constant-time compare
+- [x] `require_access_token` middleware, with public health/status paths
+- [x] No-lockout escape hatch when no token is configured
+- [x] Every endpoint resolves a client id; zero `local-user` defaults remain
+- [x] `npm run infinityvault -- token` (0600, preserves other keys)
+- [x] Frontend gate: prompt, verify, persist, 401 handling
+
+_Log:_
+- 2026-02-14 — No OAuth and no Telegram login. The vault has no accounts; the
+  Telegram session already authenticates to *storage*, so reusing it for web
+  auth would mean any Telegram login grants the photo library. A single bearer
+  token answers "is this the owner?", which is the only question here.
+- Verified the request matrix: no token and wrong token both 401 (including
+  the new backup/restore endpoints); correct bearer 200; `?access_token=` 200;
+  health and auth/status public; authenticated but missing client id 400.
+- Verified the no-lockout path: with no token configured, `/api/auth/status`
+  reports `required: false`, requests succeed, and every response carries
+  `X-InfinityVault-Security: unsecured` rather than silently pretending to be
+  protected.
+- Verified the CLI writes mode 0600 and preserves existing TELEGRAM_* keys.
+- **Security bug found in the browser:** submitting a *wrong* token rendered
+  the app shell, because unlocking was optimistic and only a later poll would
+  have rejected it. The gate now proves the token with a request before
+  rendering anything. Re-tested: wrong token re-prompts with explanatory copy.
+- **Second bug:** a *rotated* stored token also slipped through, because the
+  bootstrap trusted "a token exists" as "a token works". A stored token is now
+  verified on boot; a stale one shows the gate instead of an app that fails
+  every request.
+- Verified with a stale token stored against an *unprotected* server: no gate,
+  so a user is never locked out of their own library.
+- `mediaUrl()` appends the token, because `<img>`/`<video>`/download anchors
+  cannot set an Authorization header — the same constraint that already forced
+  `?client_id=` for thumbnails.
+- **Layout fix:** helper commands wrapped mid-token (`-- token` split across
+  lines); commands are now `white-space: nowrap`, confirmed single-line.
+
+---
+
+## Phase 4 — People
 
 ### 3.1 Token auth
 

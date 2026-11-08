@@ -20,6 +20,7 @@ Usage:
   npm run infinityvault -- setup       Configure Telegram and start both services
   npm run infinityvault -- start       Start both services using saved configuration
   npm run infinityvault -- faces       Install optional face recognition (CPU, ~400 MB)
+  npm run infinityvault -- token       Generate the access token the API requires
   npm run infinityvault -- help        Show this help
 
 Face recognition is optional. Run 'npm run infinityvault -- faces' once to
@@ -246,6 +247,27 @@ function startServices(configPath) {
   console.log('  Press Ctrl+C to stop both services.\n')
 }
 
+async function generateAccessToken(configPath) {
+  const { randomBytes } = await import('node:crypto')
+  const token = randomBytes(32).toString('base64url')
+  const existing = await readConfig(configPath)
+  existing.INFINITYVAULT_ACCESS_TOKEN = token
+
+  await mkdir(path.dirname(configPath), { recursive: true })
+  const body = Object.entries(existing)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n')
+  await writeFile(configPath, `${body}\n`, { mode: 0o600 })
+  await chmod(configPath, 0o600)
+
+  console.log('\nAccess token generated and saved to:')
+  console.log(`  ${configPath}  (mode 0600)\n`)
+  console.log('Restart the app, then paste this token when the browser asks:\n')
+  console.log(`  ${token}\n`)
+  console.log('Keep it private: anyone with this token can read your whole library.')
+  console.log('Run this command again to rotate it.')
+}
+
 async function main() {
   const args = process.argv.slice(2)
   const command = args[0] ?? 'help'
@@ -255,6 +277,11 @@ async function main() {
   }
   if (command === 'faces') {
     await installFaceSupport()
+    return
+  }
+  if (command === 'token') {
+    const configPath = path.resolve(getOption(args, '--config') ?? process.env.INFINITYVAULT_CONFIG ?? defaultConfigPath)
+    await generateAccessToken(configPath)
     return
   }
   if (command !== 'setup' && command !== 'start') {

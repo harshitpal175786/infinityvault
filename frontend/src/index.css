@@ -1965,3 +1965,116 @@
   color: var(--on-surface-variant);
   font-size: var(--text-sm);
 }
+
+/* Token gate. Deliberately a full-screen card rather than a modal: without a
+   token nothing else in the app can load, so there is no page to sit on top of. */
+.token-gate {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--surface-2);
+}
+
+.token-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 420px;
+  padding: 32px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+
+.token-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-md);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.token-title {
+  margin: 0 0 8px;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  color: var(--on-surface);
+}
+
+.token-copy {
+  margin: 0 0 22px;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--on-surface-variant);
+}
+
+.token-label {
+  margin-bottom: 8px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--on-surface);
+}
+
+.token-input {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--outline-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--on-surface);
+  font-size: var(--text-md);
+  font-family: inherit;
+}
+
+.token-input:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+
+.token-error {
+  margin: 10px 0 0;
+  font-size: var(--text-sm);
+  color: var(--danger);
+}
+
+.token-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 18px;
+  padding: 11px 16px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.token-submit:hover {
+  background: var(--primary-hover);
+}
+
+.token-hint {
+  margin: 16px 0 0;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--on-surface-variant);
+}
+
+.token-hint code {
+  /* Commands must not wrap mid-token: "-- token" on two lines is unusable. */
+  white-space: nowrap;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
