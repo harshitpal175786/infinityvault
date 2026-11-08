@@ -6,7 +6,7 @@
 
 **Plan:** `docs/PRD-PHASES.md`
 **Baseline commit:** `d68fac7`
-**Current phase:** Phase 4 (People UI) next — Phase 3 identity/auth done
+**Current phase:** Phase 5 (Explore/Map/Memories etc.) next — Phase 4 People UI done
 
 ---
 
@@ -23,6 +23,7 @@
 | 2.3 Disaster recovery | ✅ | — | Backup + restore verified |
 | 2.4 Auto-backup | ✅ | — | Throttled by change count |
 | 3 Auth (token) | ✅ | — | Bearer token, verified end to end |
+| 4 People UI | ✅ | — | Grid, rename, merge, detail |
 | 3. Identity / auth | ⬜ Not started | — | Deploy gate |
 | 3.1 Token auth | ⬜ | — | |
 | 3.2 Single-user cleanup | ⬜ | — | |

@@ -21,6 +21,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  ScanFace,
   Search,
   Send,
   Settings2,
@@ -39,12 +40,13 @@ import { usePolling } from './hooks/usePolling'
 import { ThemeToggle } from './components/ThemeToggle'
 import { UtilitiesPage } from './components/UtilitiesPage'
 import { TokenGate } from './components/TokenGate'
+import { PeoplePage } from './components/PeoplePage'
 import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listMedia, listMediaPage, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
 import type { Album, ApiMedia, Tag, TelegramAuthResponse, TelegramStatus } from './api'
 import type { MediaItem, MediaType, UploadStatus } from './types'
 
 type Filter = 'all' | MediaType
-type LibraryView = 'library' | 'favorites' | 'archive' | 'trash' | 'album' | 'utilities'
+type LibraryView = 'library' | 'favorites' | 'archive' | 'trash' | 'album' | 'utilities' | 'people'
 
 const filters: { value: Filter; label: string }[] = [
   { value: 'all', label: 'All media' },
@@ -561,6 +563,8 @@ function App() {
         ? 'Trash'
         : libraryView === 'utilities'
           ? 'Utilities'
+          : libraryView === 'people'
+            ? 'People'
           : libraryView === 'album'
             ? albums.find((album) => album.id === activeAlbumId)?.name ?? 'Album'
             : filter === 'video' ? 'Videos' : filter === 'photo' ? 'Photos' : 'Your photos'
@@ -639,6 +643,9 @@ function App() {
           </button>
           <button className={libraryView === 'trash' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('trash')}>
             <Trash2 size={18} /><span>Trash</span>
+          </button>
+          <button className={libraryView === 'people' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('people')}>
+            <ScanFace size={18} /><span>People</span>
           </button>
           <button className={libraryView === 'utilities' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('utilities')}>
             <ShieldCheck size={18} /><span>Utilities</span>
@@ -779,6 +786,8 @@ function App() {
           <div className={isDragging ? 'drop-zone dragging' : 'drop-zone'} onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }} onDragLeave={() => setIsDragging(false)} onDrop={handleDrop}>
             {libraryView === 'utilities' ? (
               <UtilitiesPage onNotice={setNotice} />
+            ) : libraryView === 'people' ? (
+              <PeoplePage onNotice={setNotice} onOpenMedia={(item) => setViewingItem(itemFromApi(item))} />
             ) : groupedItems.length > 0 ? groupedItems.map((group) => (
               <section className="date-group" key={dateKey(group.date)}>
                 <div className="date-heading"><h3>{group.label}</h3><span>{group.items.length} {group.items.length === 1 ? 'item' : 'items'}</span></div>

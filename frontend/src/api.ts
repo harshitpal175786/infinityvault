@@ -321,3 +321,57 @@ export interface BackupState {
 export function getBackupStatus(): Promise<BackupState> {
   return request<BackupState>('/api/backup/status')
 }
+
+export type Person = {
+  id: string
+  name: string | null
+  face_count: number
+  cover_face_id: string | null
+  cover_url: string | null
+}
+
+export type FaceStatus = {
+  available?: boolean
+  load_error?: string | null
+  model?: string | null
+  queued: number
+  running: number
+  done: number
+  failed: number
+  faces: number
+  people: number
+}
+
+export function listPeople(): Promise<Person[]> {
+  return request<Person[]>('/api/people')
+}
+
+export function getFaceStatus(): Promise<FaceStatus> {
+  return request<FaceStatus>('/api/faces/status')
+}
+
+export function scanFaces(): Promise<{ queued: number }> {
+  return request<{ queued: number }>('/api/faces/scan', { method: 'POST' })
+}
+
+export function clusterFaces(): Promise<{ people: number; assigned: number }> {
+  return request('/api/faces/cluster', { method: 'POST' })
+}
+
+export function renamePerson(personId: string, name: string): Promise<Person> {
+  return request<Person>(`/api/people/${personId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name: name.trim() }),
+  })
+}
+
+export function mergePeople(sourceId: string, targetId: string): Promise<{ merged_faces: number }> {
+  return request('/api/people/merge', {
+    method: 'POST',
+    body: JSON.stringify({ source_id: sourceId, target_id: targetId }),
+  })
+}
+
+export function listPersonMedia(personId: string): Promise<ApiMedia[]> {
+  return request<ApiMedia[]>(`/api/people/${personId}/media`)
+}

@@ -2078,3 +2078,312 @@
   background: var(--surface-2);
   font-size: 12px;
 }
+
+/* People page ------------------------------------------------------------- */
+.people-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.people-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.people-title {
+  margin: 0 0 4px;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  color: var(--on-surface);
+}
+
+.people-sub {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--on-surface-variant);
+}
+
+.people-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.people-actions .primary-button,
+.people-actions .ghost-button,
+.people-merge-bar .ghost-button,
+.person-detail-head .ghost-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--outline-strong);
+  background: var(--surface);
+  color: var(--on-surface);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.people-actions .primary-button {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.people-actions .primary-button:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.people-actions .ghost-button:hover:not(:disabled),
+.people-merge-bar .ghost-button:hover:not(:disabled),
+.person-detail-head .ghost-button:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.people-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.people-banner {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--on-surface-variant);
+  font-size: var(--text-sm);
+}
+
+.people-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--on-surface-variant);
+}
+
+.people-merge-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-md);
+  background: var(--primary-soft);
+  color: var(--on-surface);
+  font-size: var(--text-sm);
+}
+
+/* auto-fit, not auto-fill: with 5 people auto-fill reserves the empty sixth
+   track and leaves a dead gap on the right, so the cards do not span the row. */
+.people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 14px;
+}
+
+.person-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.person-card:hover {
+  box-shadow: var(--shadow-1);
+}
+
+/* Merge mode: only the *target* cards are clickable, so highlight them. */
+.person-card.merge-target {
+  cursor: pointer;
+  border-color: var(--primary);
+}
+
+.person-card.merge-target:hover {
+  box-shadow: var(--shadow-2);
+}
+
+.person-cover {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  background: var(--surface-2);
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.person-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.person-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px 10px;
+}
+
+.person-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--on-surface);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  cursor: pointer;
+}
+
+.person-name svg {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.person-name:hover svg,
+.person-name:focus-visible svg {
+  opacity: 0.6;
+}
+
+.person-name-empty {
+  color: var(--on-surface-variant);
+  font-style: italic;
+}
+
+.person-count {
+  font-size: var(--text-sm);
+  color: var(--on-surface-variant);
+}
+
+.person-rename {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.person-rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 7px;
+  border: 1px solid var(--outline-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--on-surface);
+  font-size: var(--text-sm);
+  font-family: inherit;
+}
+
+.person-rename-input:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--outline-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--on-surface);
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: var(--surface-2);
+}
+
+.person-merge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--on-surface);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.person-card:hover .person-merge,
+.person-merge:focus-visible {
+  opacity: 1;
+}
+
+.person-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--outline);
+}
+
+.person-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.person-detail-head h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--on-surface);
+}
+
+.person-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 8px;
+}
+
+.person-photo {
+  padding: 0;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+  cursor: pointer;
+  aspect-ratio: 1;
+}
+
+.person-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
