@@ -58,6 +58,7 @@ const MAX_PARALLEL_UPLOADS = 2
 import { useToast } from './components/Toast'
 import { ContextMenu, type MenuAction } from './components/ContextMenu'
 import { AlbumsPage } from './components/AlbumsPage'
+import { SettingsPage } from './components/SettingsPage'
 import { SkeletonGrid } from './components/Spinner'
 import { dateKey, formatDateHeading, formatDuration, formatSize, formatTime, itemFromApi, statusLabel } from './lib/format'
 import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteAlbum, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listCameras, listMedia, listMediaPage, listPeople, listTags, mediaUrl, removeMediaFromAlbum, renameAlbum, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
@@ -70,7 +71,7 @@ const filters = FILTERS
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { theme, toggleTheme } = useTheme()
+  const { theme, toggleTheme, setTheme } = useTheme()
   const [authRejected, setAuthRejected] = useState(false)
   const [authReady, setAuthReady] = useState(false)
   const [authChecking, setAuthChecking] = useState(false)
@@ -731,6 +732,8 @@ function App() {
         ? 'Trash'
         : libraryView === 'utilities'
           ? 'Utilities'
+          : libraryView === 'settings'
+            ? 'Settings'
           : libraryView === 'people'
             ? 'People'
             : libraryView === 'explore'
@@ -1128,6 +1131,15 @@ function App() {
                 onOpenMedia={(item) => setViewingItem(itemFromApi(item, mediaUrl))}
                 onPersonChanged={(person) => setPeople((current) => current.map((each) => each.id === person.id ? person : each))}
                 onPersonDeleted={(personId) => setPeople((current) => current.filter((each) => each.id !== personId))}
+              />
+            ) : libraryView === 'settings' ? (
+              <SettingsPage
+                theme={theme}
+                onThemeChange={setTheme}
+                sidebarCollapsed={sidebarCollapsed}
+                onToggleSidebar={() => toggleSidebar()}
+                onOpenTelegram={() => setIsTelegramOpen(true)}
+                onOpenUtilities={() => setLibraryView('utilities')}
               />
             ) : libraryView === 'explore' ? (
               <ExplorePage onNotice={setNotice} onOpenMedia={(item) => setViewingItem(itemFromApi(item, mediaUrl))} />

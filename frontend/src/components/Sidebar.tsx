@@ -102,6 +102,9 @@ export function Sidebar({
           <button className={libraryView === 'utilities' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('utilities')}>
             <ShieldCheck size={18} /><span>Utilities</span>
           </button>
+          <button className={libraryView === 'settings' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('settings')}>
+            <Settings2 size={18} /><span>Settings</span>
+          </button>
         </div>
 
         <div className="sidebar-section sidebar-filters">

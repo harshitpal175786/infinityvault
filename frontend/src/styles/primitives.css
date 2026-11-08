@@ -1135,3 +1135,120 @@
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* --- Settings ------------------------------------------------------------ */
+.settings-page {
+  max-width: 780px;
+  padding: 4px 0 48px;
+}
+
+.settings-loading {
+  display: grid;
+  place-items: center;
+  padding: 64px 0;
+}
+
+.settings-section {
+  margin-bottom: 28px;
+  padding: 18px 20px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.settings-section h2 {
+  margin: 0 0 4px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.settings-hint {
+  margin: 0 0 14px;
+  font-size: var(--text-sm);
+  color: var(--on-surface-variant);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--outline-variant);
+}
+
+.settings-row:first-of-type {
+  border-top: 0;
+}
+
+.settings-row-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-container);
+  color: var(--on-surface-variant);
+}
+
+.settings-row-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-row-body strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.settings-row-body span {
+  font-size: var(--text-sm);
+  color: var(--on-surface-variant);
+}
+
+.settings-row .ghost-button {
+  flex-shrink: 0;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.segmented-item {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: none;
+  color: var(--on-surface-variant);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-transform: capitalize;
+  cursor: pointer;
+}
+
+.segmented-item.active {
+  /* Primary, not surface-on-surface-2: the surface delta is nearly invisible in
+     dark mode, which made the selected theme unclear. */
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+@media (max-width: 767px) {
+  .settings-row {
+    flex-wrap: wrap;
+  }
+
+  .settings-row-body {
+    flex-basis: calc(100% - 44px);
+  }
+}

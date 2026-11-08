@@ -25,6 +25,7 @@ export type LibraryView =
   | 'utilities'
   | 'people'
   | 'explore'
+  | 'settings'
 
 export const FILTERS: { value: Filter; label: string }[] = [
   { value: 'all', label: 'All media' },
