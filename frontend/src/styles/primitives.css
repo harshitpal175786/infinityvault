@@ -1252,3 +1252,67 @@
     flex-basis: calc(100% - 44px);
   }
 }
+
+/* --- Crash fallback ------------------------------------------------------ */
+.crash-screen {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--surface-2);
+}
+
+.crash-card {
+  width: min(520px, 100%);
+  padding: 28px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  text-align: center;
+  box-shadow: var(--shadow-2);
+}
+
+.crash-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  background: var(--surface-container);
+  color: var(--danger);
+}
+
+.crash-card h1 {
+  margin: 0 0 8px;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.crash-card p {
+  margin: 0 0 16px;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--on-surface-variant);
+}
+
+.crash-detail {
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-container);
+  color: var(--on-surface-variant);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.crash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
