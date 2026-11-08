@@ -41,8 +41,8 @@ cover, and no way to manage them.
 
 ## Deliberate scope limits
 
-- **No sharing or public links.** The brief lists them under Phase 7 and they
-  need auth work that does not exist.
+- **No sharing or public links.** Cancelled outright, not deferred — see
+  `docs/UI-UPGRADE-SCOPE-CUTS.md`. There is no permission model for it.
 - **No nested albums / folders.** Immich has them; the schema has no parent
   column and adding one now would ripple through every album query.
 - **Delete stays as-is**: `deleteAlbum` removes the album and its links, never
