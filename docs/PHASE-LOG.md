@@ -490,3 +490,55 @@ download finished.
   range, frames visible, toggle reads "Playing preview".
 - `/api/videos/status` works via header and via `?client_id=`.
 - Both failure paths mark `failed` without wedging the worker.
+
+
+## Phase 7 — App.tsx decomposition
+
+`App.tsx` reached 1282 lines: timeline, filters, auth, upload, viewer and five
+modals in one file. Every later phase cost more because of it.
+
+### What moved
+
+| Destination | Contents | Lines |
+|---|---|---|
+| `lib/format.ts` | `formatDateHeading`, `dateKey`, `formatTime`, `formatSize`, `formatDuration`, `statusLabel`, `itemFromApi` | 127 |
+| `components/MediaViews.tsx` | `MediaCard`, `MediaDetailsModal`, `EmptyState`, `TelegramModal`, `MediaViewer` | 366 |
+| `hooks/useLibraryFilters.ts` | View, tab, sort, advanced-filter, album/tag/camera and search state | 120 |
+
+`App.tsx`: **1282 -> 880**. A further 655 lines are JSX (sidebar, toolbar,
+timeline markup) that can be split next.
+
+### Decisions
+
+- **`itemFromApi` takes the URL builder as an argument** instead of importing
+  `mediaUrl`. The token is read at call time, so importing it would freeze the
+  wrong token into any cached mapping; passing it in also keeps the function
+  testable. Note this made a bare `.map(itemFromApi)` wrong, because the index
+  would be passed as the builder — every call site now passes it explicitly.
+- **Presentational components take everything by props.** A grep confirmed none
+  of them read app state, only local UI state (loading, hover, the viewer's
+  preview/original toggle), which is what made the seam safe.
+- **`buildFilterParams()` deliberately does *not* send the sidebar tab.** That
+  tab has always been applied client-side to the fetched page. Sending it would
+  change pagination behaviour (Videos-only would stop paging while photos
+  remain), which is an improvement but not a refactor. Documented in the hook so
+  the next person does not "fix" it by accident.
+
+### Verified
+
+- `tsc --noEmit` and `npm run build` clean.
+- **Pixel comparison against the pre-refactor build: identical.** Screenshots
+  of the original (stashed via `git stash`) and the refactored version, with
+  images forced to decode first, differ by zero pixels.
+- Interactive paths exercised: all media 7 -> Videos only 1 -> Photos only 6 ->
+  back to 7, oldest-first ordering produces ascending date headings, filter
+  Clear restores 7, viewer opens and closes, **no console errors and no failed
+  requests**.
+
+### Note on a bug found while doing this
+
+`buildFilterParams` initially overrode the Order dropdown with the sidebar
+Newest/Oldest toggle. Both controls existed and mean different things: the
+dropdown stores `advancedFilters.sort`, the sidebar stores `sortDirection`. The
+hook now keeps them separate and matches the precedence already used by the
+timeline memo (`advancedFilters.sort` wins when set).
