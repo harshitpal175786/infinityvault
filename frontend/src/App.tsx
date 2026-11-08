@@ -105,6 +105,7 @@ function itemFromApi(media: ApiMedia): MediaItem {
     height: media.height,
     duration: media.duration,
     uploadStatus: media.upload_status,
+    fileState: media.file_state,
     uploadError: media.upload_error,
     telegramMessageId: media.telegram_message_id,
     checksum: media.checksum,
@@ -672,7 +673,9 @@ function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView, onFav
         : <Cloud size={11} />
 
   const canView = item.uploadStatus === 'uploaded' && Boolean(item.telegramUrl)
-  const [previewFailed, setPreviewFailed] = useState(false)
+  // Start failed if the server already told us the local copy is gone, so we
+  // do not fire a request that is guaranteed to 404.
+  const [previewFailed, setPreviewFailed] = useState(item.fileState === 'missing')
 
   return (
     <article className={selected ? 'media-card selected' : 'media-card'}>
@@ -691,7 +694,10 @@ function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView, onFav
         }}
       >
         {previewFailed
-          ? <div className="preview-missing"><AlertCircle size={16} /><span>Preview unavailable</span></div>
+          ? <div className="preview-missing">
+              <AlertCircle size={16} />
+              <span>{item.fileState === 'missing' ? 'File missing' : 'Preview unavailable'}</span>
+            </div>
           : item.type === 'photo'
             ? <img src={item.url} alt={item.name} loading="lazy" onError={() => setPreviewFailed(true)} />
             : <video src={item.url} muted playsInline preload="metadata" onError={() => setPreviewFailed(true)} />}

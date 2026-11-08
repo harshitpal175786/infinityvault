@@ -17,6 +17,8 @@ export type MediaItem = {
   duration?: number
   file?: File
   uploadStatus: UploadStatus
+  /** 'missing' means the local copy is gone; metadata is still intact. */
+  fileState?: 'present' | 'missing' | 'recovering'
   uploadError?: string
   telegramMessageId?: number
   checksum?: string

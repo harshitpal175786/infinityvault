@@ -175,6 +175,7 @@ def init_db() -> None:
             "folder_path": "ALTER TABLE media_items ADD COLUMN folder_path TEXT",
             "latitude": "ALTER TABLE media_items ADD COLUMN latitude REAL",
             "longitude": "ALTER TABLE media_items ADD COLUMN longitude REAL",
+            "file_state": "ALTER TABLE media_items ADD COLUMN file_state TEXT NOT NULL DEFAULT 'present'",
         }
         for column, statement in migrations.items():
             if column not in columns:
@@ -628,6 +629,9 @@ def row_to_media(row: sqlite3.Row, api_prefix: str = "/api") -> dict[str, Any]:
         "upload_status": row["upload_status"],
         "upload_error": row["upload_error"],
         "telegram_message_id": row["telegram_message_id"],
+        # "missing" means the local copy is gone but metadata is intact; the
+        # UI shows a placeholder instead of a broken image.
+        "file_state": row["file_state"],
     }
 
 
@@ -884,3 +888,141 @@ def row_to_face(row: sqlite3.Row) -> dict[str, Any]:
         },
         "det_score": row["det_score"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Local file paths
+#
+# Paths are stored RELATIVE to DATA_DIR. Storing an absolute path means the
+# library breaks the moment the project folder is renamed or moved -- which is
+# exactly what happened to rows created before this change (they point at the
+# old "telegram-gallery" folder).
+# ---------------------------------------------------------------------------
+
+def to_relative(path: str | Path) -> str:
+    """Store a path relative to DATA_DIR when it lives inside it."""
+    candidate = Path(path)
+    try:
+        return str(candidate.resolve().relative_to(DATA_DIR.resolve()))
+    except (ValueError, OSError):
+        # Outside DATA_DIR: keep only the filename so the row stays portable.
+        return candidate.name
+
+
+def resolve_local_path(stored: str | None) -> Path:
+    """Turn a stored path into an absolute path, tolerating legacy rows."""
+    if not stored:
+        return UPLOAD_DIR / "__missing__"
+    candidate = Path(stored)
+    if candidate.is_absolute():
+        return candidate
+    return DATA_DIR / candidate
+
+
+def local_file_exists(stored: str | None) -> bool:
+    return resolve_local_path(stored).is_file()
+
+
+def list_rows_needing_path_check() -> list[sqlite3.Row]:
+    with closing(open_db()) as connection:
+        return connection.execute(
+            "SELECT id, client_id, local_path, original_name, media_type, "
+            "file_state, telegram_message_id FROM media_items"
+        ).fetchall()
+
+
+def update_local_path(media_id: str, stored_path: str, file_state: str = "present") -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE media_items SET local_path = ?, file_state = ? WHERE id = ?",
+            (stored_path, file_state, media_id),
+        )
+        connection.commit()
+
+
+def set_file_state(media_id: str, file_state: str) -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE media_items SET file_state = ? WHERE id = ?", (file_state, media_id)
+        )
+        connection.commit()
+
+
+def find_row_by_local_filename(filename: str) -> sqlite3.Row | None:
+    """Locate a row by the tail of its stored path (used to rebase paths)."""
+    with closing(open_db()) as connection:
+        return connection.execute(
+            "SELECT id, client_id, local_path FROM media_items "
+            "WHERE local_path LIKE ? OR local_path = ? LIMIT 1",
+            (f"%{filename}", filename),
+        ).fetchone()
+
+
+def rebase_stale_paths() -> dict[str, int]:
+    """Rewrite absolute paths that point outside DATA_DIR.
+
+    A legacy row may still be valid if the file exists at the *old* absolute
+    location, so we only rebase when the current location is unreadable.
+    """
+    stats = {"rebased": 0, "missing": 0}
+    for row in list_rows_needing_path_check():
+        stored = row["local_path"]
+        if local_file_exists(stored):
+            continue
+
+        candidate = resolve_local_path(stored)
+        # Try the same filename inside UPLOAD_DIR before giving up.
+        relocated = UPLOAD_DIR / candidate.name
+        if relocated.is_file():
+            update_local_path(row["id"], to_relative(relocated), "present")
+            stats["rebased"] += 1
+        else:
+            set_file_state(row["id"], "missing")
+            stats["missing"] += 1
+    return stats
+
+
+def reconcile_local_files(telegram_lookup=None) -> dict[str, int]:
+    """Startup reconciliation: make every row's file state truthful.
+
+    Order of attempts per row:
+      1. Does the stored path resolve to a real file?  -> present
+      2. Is that filename sitting in UPLOAD_DIR?       -> rebase, present
+      3. Is there a copy in the Telegram cache?        -> repoint, present
+      4. Otherwise                                     -> missing
+    """
+    stats = {"ok": 0, "rebased": 0, "restored": 0, "missing": 0}
+    for row in list_rows_needing_path_check():
+        stored = row["local_path"]
+
+        if local_file_exists(stored):
+            # The file is readable, but an absolute path is still fragile:
+            # normalise it to a relative one so a future move cannot break it.
+            candidate = resolve_local_path(stored)
+            try:
+                candidate.resolve().relative_to(DATA_DIR.resolve())
+            except ValueError:
+                stats["ok"] += 1          # genuinely outside DATA_DIR; leave it
+            else:
+                if Path(stored).is_absolute():
+                    update_local_path(row["id"], to_relative(candidate), "present")
+                stats["ok"] += 1
+            continue
+
+        candidate = resolve_local_path(stored)
+        relocated = UPLOAD_DIR / candidate.name
+        if relocated.is_file():
+            update_local_path(row["id"], to_relative(relocated), "present")
+            stats["rebased"] += 1
+            continue
+
+        cached = CACHE_DIR / candidate.name
+        if cached.is_file():
+            update_local_path(row["id"], to_relative(cached), "present")
+            stats["restored"] += 1
+            continue
+
+        stats["missing"] += 1
+        set_file_state(row["id"], "missing")
+
+    return stats

@@ -30,6 +30,7 @@ export type ApiMedia = {
   height?: number
   duration?: number
   preview_url: string
+  file_state?: 'present' | 'missing' | 'recovering'
   telegram_url?: string
   telegram_download_url?: string
   upload_status: UploadStatus

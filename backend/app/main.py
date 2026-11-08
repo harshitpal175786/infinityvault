@@ -1,6 +1,7 @@
+import hashlib
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
-import hashlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +12,13 @@ from pydantic import BaseModel
 
 from . import db
 from .face_service import FaceService, FaceUnavailable
+
+logger = logging.getLogger(__name__)
+# uvicorn configures its own loggers but leaves ours without a handler, so
+# reconciliation and face-service messages would be invisible. Propagate to a
+# root logger with a plain format instead.
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
 from .telegram_service import TelegramService
 
 
@@ -19,6 +27,17 @@ async def lifespan(app: FastAPI):
     service = TelegramService()
     app.state.telegram_service = service
     await service.start()
+
+    # Repair stale/absolute paths before any service reads them.
+    try:
+        stats = db.reconcile_local_files()
+        if stats["rebased"] or stats["restored"] or stats["missing"]:
+            logger.info(
+                "Local file reconciliation: %s ok, %s rebased, %s restored, %s missing",
+                stats["ok"], stats["rebased"], stats["restored"], stats["missing"],
+            )
+    except Exception:
+        logger.exception("Local file reconciliation failed")
 
     faces = FaceService()
     app.state.face_service = faces
@@ -220,7 +239,8 @@ async def upload_media(
         width=width,
         height=height,
         duration=duration,
-        local_path=str(local_path),
+        # Stored relative to DATA_DIR so the library survives a folder move.
+        local_path=db.to_relative(local_path),
         checksum=checksum,
     )
     await telegram_service(request).enqueue(media_id)
@@ -278,7 +298,7 @@ async def delete_media(
             raise HTTPException(status_code=502, detail="Telegram could not delete the original media") from error
     local_path = db.delete_media(media_id, client_id)
     if local_path:
-        Path(local_path).unlink(missing_ok=True)
+        db.resolve_local_path(local_path).unlink(missing_ok=True)
     (db.CACHE_DIR / f"{media_id}{Path(row['original_name']).suffix.lower()[:12]}").unlink(missing_ok=True)
     return {"deleted": True}
 
@@ -353,7 +373,7 @@ def media_content(
     row = db.get_media(media_id, effective_client_id)
     if not row:
         raise HTTPException(status_code=404, detail="Media not found")
-    path = Path(row["local_path"])
+    path = db.resolve_local_path(row["local_path"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="Media preview is no longer available")
     return FileResponse(path, media_type=row["mime_type"], filename=row["original_name"], content_disposition_type="inline")
@@ -519,7 +539,7 @@ def face_thumbnail(face_id: str, client_id: str = Header(default="local-user", a
     except ImportError as error:
         raise HTTPException(status_code=503, detail="Face thumbnails need opencv installed") from error
 
-    image = cv2.imread(str(face["local_path"]))
+    image = cv2.imread(str(db.resolve_local_path(face["local_path"])))
     if image is None:
         raise HTTPException(status_code=404, detail="The original image is no longer available")
 

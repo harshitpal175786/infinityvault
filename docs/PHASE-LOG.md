@@ -6,7 +6,7 @@
 
 **Plan:** `docs/PRD-PHASES.md`
 **Baseline commit:** `d68fac7`
-**Current phase:** Phase 1 — not started
+**Current phase:** Phase 1 — 1.1 complete, 1.2 next
 
 ---
 
@@ -14,8 +14,8 @@
 
 | Phase | Status | Owner | Notes |
 | --- | --- | --- | --- |
-| 1. Trust the library | ⬜ Not started | — | Paths + pagination |
-| 1.1 `local_path` reconciliation | ⬜ | — | P0 |
+| 1. Trust the library | 🟡 In progress | — | Paths done, pagination next |
+| 1.1 `local_path` reconciliation | ✅ | — | Verified on real DB |
 | 1.2 Pagination | ⬜ | — | |
 | 2. Telegram cold store | ⬜ Not started | — | |
 | 2.1 Thumbnails | ⬜ | — | |
@@ -64,13 +64,30 @@ cd frontend && npm run build                             # ok
 
 ### 1.1 `local_path` reconciliation
 
-- [ ] Paths stored relative to `DATA_DIR`
-- [ ] `file_state` column (`present | missing | recovering`)
-- [ ] Startup reconciliation with summary log
-- [ ] Refetch from Telegram on missing file
-- [ ] Frontend shows "unavailable" state without breaking the timeline
+- [x] Paths stored relative to `DATA_DIR`
+- [x] `file_state` column (`present | missing | recovering`) — additive migration
+- [x] Startup reconciliation with summary log
+- [x] Absolute paths inside `DATA_DIR` normalised to relative (not just broken ones)
+- [x] Frontend distinguishes "File missing" from "Preview unavailable", and
+      does not fire a request for a row the server already marked missing
+- [ ] Refetch from Telegram on missing file — **deferred to Phase 2**: the
+      refetch needs the thumbnail/proxy cache work to be useful, and currently
+      `telegram_media_path()` writes into `CACHE_DIR`, which reconciliation
+      already checks, so a cached copy is restored automatically.
 
-_Log:_ (empty)
+_Log:_
+- 2026-02-14 — Implemented. Resolution order per row: stored path → same
+  filename in `UPLOAD_DIR` → same filename in `CACHE_DIR` → `missing`.
+- Verified against a synthetic DB with 4 cases (legacy absolute / rebasable /
+  cache-restorable / healthy): got `{ok:1, rebased:1, restored:1, missing:1}`.
+- Verified against a **copy of the real DB** (5 rows): 2 legacy rows rebased,
+  3 absolute-but-valid rows normalised to relative. All 5 then resolve to
+  existing files.
+- Verified live: stale path → restart → rebased, logged, `/content` returns 200.
+  Missing file → `/content` 404 (not 500), API reports `file_state: missing`.
+- Found and fixed: root logger had no handler under uvicorn, so reconciliation
+  messages were invisible. Added `basicConfig` guard.
+- Found and fixed: `list_rows_needing_path_check` did not select `file_state`.
 
 ### 1.2 Pagination
 
