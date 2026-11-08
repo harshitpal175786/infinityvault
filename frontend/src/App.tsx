@@ -43,6 +43,7 @@ import { UtilitiesPage } from './components/UtilitiesPage'
 import { TokenGate } from './components/TokenGate'
 import { PeoplePage } from './components/PeoplePage'
 import { ExplorePage } from './components/ExplorePage'
+import { Sidebar } from './components/Sidebar'
 import { EmptyState, MediaCard, MediaDetailsModal, MediaViewer, TelegramModal } from './components/MediaViews'
 import { useLibraryFilters, FILTERS, type Filter, type LibraryView } from './hooks/useLibraryFilters'
 import { dateKey, formatDateHeading, formatDuration, formatSize, formatTime, itemFromApi, statusLabel } from './lib/format'
@@ -407,6 +408,14 @@ function App() {
     }
   }
 
+  function toggleSidebar() {
+    setSidebarCollapsed((current) => {
+      // Persisted so the choice survives a reload; read back in useState above.
+      window.localStorage.setItem('infinityvault-sidebar', current ? 'expanded' : 'collapsed')
+      return !current
+    })
+  }
+
   async function createNewAlbum() {
     const name = window.prompt('Album name')?.trim()
     if (!name) return
@@ -571,89 +580,25 @@ function App() {
   return (
     <div className="app-shell" data-collapsed={sidebarCollapsed} data-drawer={drawerOpen}>
       {drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
-      <aside className="sidebar" data-collapsed={sidebarCollapsed}>
-        <div className="brand">
-          <div className="brand-mark"><Images size={18} strokeWidth={2.5} /></div>
-          <div className="brand-copy"><strong>infinityvault</strong><span>Private memories</span></div>
-        </div>
-
-        <div className="sidebar-section">
-          <p className="eyebrow">Library</p>
-          <button className={libraryView === 'library' && filter === 'all' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('library')} title="Photos">
-            <Images size={18} />
-            <span>Photos</span>
-            <span className="nav-count">{items.length}</span>
-          </button>
-          <button className={libraryView === 'album' ? 'nav-item active' : 'nav-item'} type="button" onClick={createNewAlbum}>
-            <Archive size={18} />
-            <span>Albums</span>
-            <Plus size={14} className="nav-count" />
-          </button>
-          {albums.map((album) => <button className={libraryView === 'album' && activeAlbumId === album.id ? 'nav-item nested active' : 'nav-item nested'} type="button" key={album.id} onClick={() => openView('album', album.id)}><Folder size={16} /><span>{album.name}</span><span className="nav-count">{album.media_count}</span></button>)}
-          <button className={libraryView === 'favorites' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('favorites')}>
-            <Star size={18} />
-            <span>Favorites</span><span className="nav-count">{items.filter((item) => item.isFavorite).length}</span>
-          </button>
-          <button className={libraryView === 'archive' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('archive')}>
-            <Archive size={18} /><span>Archive</span>
-          </button>
-          <button className={libraryView === 'trash' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('trash')}>
-            <Trash2 size={18} /><span>Trash</span>
-          </button>
-          <button className={libraryView === 'explore' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('explore')}>
-            <Compass size={18} /><span>Explore</span>
-          </button>
-          <button className={libraryView === 'people' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('people')}>
-            <ScanFace size={18} /><span>People</span>
-          </button>
-          <button className={libraryView === 'utilities' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => openView('utilities')}>
-            <ShieldCheck size={18} /><span>Utilities</span>
-          </button>
-        </div>
-
-        <div className="sidebar-section sidebar-filters">
-          <p className="eyebrow">Quick filters</p>
-          <button className={libraryView === 'library' && filter === 'photo' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => { openView('library'); setFilter('photo') }}>
-            <ImagePlus size={17} /><span>Photos only</span><span className="nav-count">{photoCount}</span>
-          </button>
-          <button className={libraryView === 'library' && filter === 'video' ? 'nav-item active' : 'nav-item'} type="button" onClick={() => { openView('library'); setFilter('video') }}>
-            <Film size={17} /><span>Videos only</span><span className="nav-count">{videoCount}</span>
-          </button>
-        </div>
-
-        <div className="sidebar-section sidebar-bottom">
-          <p className="eyebrow">Storage</p>
-          <div className="telegram-status">
-            <div className="status-icon"><Send size={17} /></div>
-            <div>
-              <strong>Telegram</strong>
-              <span className="status-copy"><i className={telegramStatus.connected ? 'status-dot connected' : 'status-dot'} /> {telegramStatus.connected ? 'Connected' : telegramStatus.configured ? 'Ready to connect' : 'Setup needed'}</span>
-            </div>
-            <button className="icon-button subtle" type="button" aria-label="Open Telegram setup" onClick={() => setIsTelegramOpen(true)}>
-              <Settings2 size={16} />
-            </button>
-          </div>
-          <button className="connect-button" type="button" onClick={() => setIsTelegramOpen(true)}>
-            <Send size={16} />
-            <span>Connect Telegram</span>
-          </button>
-        </div>
-
-        <div className="sidebar-footer">
-          <ThemeToggle theme={theme} onToggle={toggleTheme} />
-          <button
-            className="collapse-button"
-            type="button"
-            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            onClick={() => setSidebarCollapsed((current) => {
-              window.localStorage.setItem('infinityvault-sidebar', current ? 'expanded' : 'collapsed')
-              return !current
-            })}
-          >
-            {sidebarCollapsed ? <ChevronsRight size={15} /> : <ChevronsLeft size={15} />}
-          </button>
-        </div>
-      </aside>
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        libraryView={libraryView}
+        filter={filter}
+        photoCount={photoCount}
+        videoCount={videoCount}
+        albums={albums}
+        items={items}
+        activeAlbumId={activeAlbumId}
+        telegramStatus={telegramStatus}
+        openView={openView}
+        setFilter={setFilter}
+        onOpenTelegram={() => setIsTelegramOpen(true)}
+        onCreateAlbum={() => void createNewAlbum()}
+        onSetDrawerOpen={setDrawerOpen}
+        onToggleCollapse={toggleSidebar}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
 
       <main className="main-content">
         <header className="topbar">

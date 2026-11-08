@@ -280,14 +280,62 @@ def read_image_coordinates(path: Path) -> tuple[float, float] | None:
     return normalized_lat, normalized_lon
 
 
+# This is a single-owner vault: there is exactly one library, and the token in
+# Phase 3 is what proves you are its owner. `client_id` therefore no longer
+# identifies *which* library -- it identifies nothing at all -- but the column
+# is still on every row and every URL, and rewriting 50 routes at once would put
+# the whole API at risk for no user-visible gain.
+#
+# So the client id became a default instead of a requirement: a caller that
+# sends one (the browser does, and image URLs must) is honoured, and a caller
+# that sends none gets the owner. This removes the class of 400 that image
+# routes kept hitting, and it matches the model the PRD describes.
+OWNER_CLIENT_ID = "owner"
+
+
 def resolve_client_id(client_id: str | None, query_client_id: str | None = None) -> str:
-    resolved = query_client_id or client_id
-    if not resolved:
-        raise HTTPException(
-            status_code=400,
-            detail="A client id is required (X-Client-ID header or ?client_id= query parameter).",
-        )
-    return resolved
+    """The library to act on. Always resolves; never raises.
+
+    Order of preference:
+
+    1. An explicit id from the caller (header or query), because the browser
+       sends one and image URLs must.
+    2. The id the existing library was actually written with. This matters: a
+       vault created before this change has rows under a browser-generated
+       UUID, and defaulting straight to "owner" would make every one of those
+       photos invisible -- the library would look empty. Reading the id back
+       from the rows keeps old data reachable without a migration.
+    3. OWNER_CLIENT_ID, for a genuinely empty database.
+    """
+    explicit = query_client_id or client_id
+    if explicit:
+        return explicit
+    return _existing_owner_id() or OWNER_CLIENT_ID
+
+
+_owner_cache: str | None = None
+
+
+def _existing_owner_id() -> str | None:
+    """The client id the library is already stored under, if any.
+
+    Cached after the first read: this runs on every request, and the answer only
+    changes when a database is swapped, which does not happen at runtime.
+    """
+    global _owner_cache
+    if _owner_cache:
+        return _owner_cache
+    try:
+        with db.closing(db.open_db()) as connection:
+            row = connection.execute(
+                "SELECT client_id FROM media_items GROUP BY client_id "
+                "ORDER BY COUNT(*) DESC LIMIT 1"
+            ).fetchone()
+    except Exception:
+        return None
+    if row and row["client_id"]:
+        _owner_cache = row["client_id"]
+    return _owner_cache
 
 
 @app.get("/api/auth/status")

@@ -542,3 +542,30 @@ Newest/Oldest toggle. Both controls existed and mean different things: the
 dropdown stores `advancedFilters.sort`, the sidebar stores `sortDirection`. The
 hook now keeps them separate and matches the precedence already used by the
 timeline memo (`advancedFilters.sort` wins when set).
+
+
+## Remediation — closing the PRD audit gaps
+
+An audit of `docs/PRD-PHASES.md` against the code (rather than the phase log)
+found several tasks the PRD listed that had never been built. All are now done;
+`docs/PRD-COMPLIANCE-AUDIT.md` records each one and how it was verified.
+
+- **5.6** person / tag / place / favourites filters — added end to end.
+- **5.1** Explore Tags, People and Areas sections.
+- **5.5** duplicate groups can be resolved by trashing the extras, keeping the
+  oldest. Reversible by design.
+- **5.7** Utilities: largest files and location-gap coverage.
+- **6** a missing proxy is re-queued on play instead of 404ing forever.
+- **3.2** `client_id` is no longer required; it resolves to the owner.
+- **7** `Sidebar` extracted, verified pixel-identical.
+
+Two things worth remembering from this pass:
+
+1. **The gap was in the plan, not the code.** Phase 5 was tracked against a
+   six-item list that did not match the PRD's seven, so three tasks left the
+   scope silently. Diffing the PRD against the implementation is what caught it.
+2. **3.2 nearly shipped a data-loss bug.** Defaulting an absent client id to
+   `"owner"` made every pre-existing row invisible, because they are stored under
+   a browser-generated UUID. Resolving to the id actually present in the table
+   fixed it. The lesson: a "simplification" that changes which rows a query
+   matches needs a test with real pre-existing data, not an empty database.

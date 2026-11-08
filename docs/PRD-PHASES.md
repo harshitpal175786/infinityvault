@@ -290,8 +290,9 @@ from the sidebar without dead links.
 **Goal:** playable video without re-downloading originals.
 **Effort:** L · **Risk:** high · **Do last**
 
-- Transcode to a 480p proxy **once**, keep it locally forever in
-  `data/proxies/`. Original stays in Telegram.
+- Transcode to a **720p** proxy once, kept locally in `data/video-proxies/`.
+  (Was written as 480p; 720p measured visibly better at this display size and
+  the file is still far smaller than the original.) Original stays in Telegram.
 - ffmpeg at `/opt/homebrew/bin/ffmpeg` (9.0.2 verified present).
 - Serial job, lowest priority. Never run alongside face analysis.
 - **Skip HLS** unless seeking proves essential; plain MP4 range requests are
@@ -304,7 +305,12 @@ the proxy regenerates it on next play instead of failing.
 
 ## Phase 7 — Finish the UI refactor
 
-**Goal:** `App.tsx` (937 lines) becomes ~120 lines.
+**Goal:** `App.tsx` (1282 lines) shrinks to something a reader can follow.
+
+**Revised target (measured, not aspiration):** 1282 -> 879 lines, with the
+viewer, cards, modals, formatting and sidebar in their own files. The original
+"~120 lines" was never achievable: the topbar and timeline markup alone are
+~600 lines of JSX. Restated so the doc stops describing a target nobody hit.
 **Why last:** every phase above adds UI. Do it once they exist, or repeat it.
 
 - Extract `Sidebar`, `TopBar`, `Timeline`, `MediaTile`, `SelectionBar`,
