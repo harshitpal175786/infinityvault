@@ -18,8 +18,12 @@ import {
   Download,
   ImagePlus,
   MapPin,
+  Info,
+  Maximize2,
   Pencil,
   Play,
+  ZoomIn,
+  ZoomOut,
   RefreshCw,
   Send,
   Star,
@@ -31,6 +35,9 @@ import {
 import type { MediaItem } from '../types'
 import type { TelegramStatus } from '../api'
 import { mediaUrl, startTelegramAuth, verifyTelegramAuth, disconnectTelegram, type TelegramAuthResponse } from '../api'
+import { useZoomPan } from '../hooks/useZoomPan'
+import { useFullscreen } from '../hooks/useFullscreen'
+import { ViewerInfo } from './ViewerInfo'
 import {
   formatDateHeading,
   formatDuration,
@@ -284,7 +291,17 @@ export function TelegramModal({ status, onConnected, onDisconnected, onClose }: 
   )
 }
 
-export function MediaViewer({ item, items, onChange, onClose }: { item: MediaItem; items: MediaItem[]; onChange: (item: MediaItem) => void; onClose: () => void }) {
+export function MediaViewer({ item, items, onChange, onClose, onFavorite, tags }: {
+  item: MediaItem
+  items: MediaItem[]
+  onChange: (item: MediaItem) => void
+  onClose: () => void
+  onFavorite: () => void
+  tags?: string[]
+}) {
+  const zoom = useZoomPan(item.id)
+  const fullscreen = useFullscreen<HTMLDivElement>()
+  const [showInfo, setShowInfo] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -305,13 +322,22 @@ export function MediaViewer({ item, items, onChange, onClose }: { item: MediaIte
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      // Never steal keys from a field the user is typing in.
+      const target = event.target as HTMLElement | null
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
+
       if (event.key === 'Escape') onClose()
-      if (event.key === 'ArrowLeft' && hasPrevious) onChange(items[currentIndex - 1])
-      if (event.key === 'ArrowRight' && hasNext) onChange(items[currentIndex + 1])
+      else if (event.key === 'ArrowLeft' && hasPrevious) onChange(items[currentIndex - 1])
+      else if (event.key === 'ArrowRight' && hasNext) onChange(items[currentIndex + 1])
+      else if (event.key === '+' || event.key === '=') zoom.zoomIn()
+      else if (event.key === '-') zoom.zoomOut()
+      else if (event.key === '0') zoom.reset()
+      else if (event.key === 'f' || event.key === 'F') void fullscreen.toggle()
+      else if (event.key === 'i' || event.key === 'I') setShowInfo((v) => !v)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentIndex, hasNext, hasPrevious, items, onChange, onClose])
+  }, [currentIndex, fullscreen, hasNext, hasPrevious, items, onChange, onClose, zoom])
 
   function retry() {
     setError('')
@@ -328,6 +354,15 @@ export function MediaViewer({ item, items, onChange, onClose }: { item: MediaIte
             <h2 id="viewer-title">{item.name}</h2>
           </div>
           <div className="viewer-actions">
+            {item.type === 'photo' && (
+              <>
+                <button className="icon-button" type="button" aria-label="Zoom out" onClick={zoom.zoomOut} disabled={!zoom.isZoomed}><ZoomOut size={16} /></button>
+                <span className="viewer-zoom-label" aria-live="polite">{Math.round(zoom.scale * 100)}%</span>
+                <button className="icon-button" type="button" aria-label="Zoom in" onClick={zoom.zoomIn}><ZoomIn size={16} /></button>
+              </>
+            )}
+            <button className="icon-button" type="button" aria-label={fullscreen.isFullscreen ? 'Exit full screen' : 'Enter full screen'} aria-pressed={fullscreen.isFullscreen} onClick={() => void fullscreen.toggle()}><Maximize2 size={16} /></button>
+            <button className="icon-button" type="button" aria-label="Item details" aria-pressed={showInfo} onClick={() => setShowInfo((v) => !v)}><Info size={16} /></button>
             {item.type === 'video' && item.proxyUrl && (
               <button
                 className="download-button"
@@ -346,11 +381,31 @@ export function MediaViewer({ item, items, onChange, onClose }: { item: MediaIte
             <button className="modal-close icon-button" type="button" aria-label="Close viewer" onClick={onClose}><X size={18} /></button>
           </div>
         </header>
-        <div className="viewer-stage">
+        <div className={showInfo ? 'viewer-body with-info' : 'viewer-body'}>
+        <div
+          className={zoom.isZoomed ? 'viewer-stage zoomed' : 'viewer-stage'}
+          ref={(node) => { zoom.stageRef.current = node; fullscreen.ref.current = node }}
+          onWheel={item.type === 'photo' ? zoom.onWheel : undefined}
+          onPointerDown={item.type === 'photo' ? zoom.onPointerDown : undefined}
+          onPointerMove={item.type === 'photo' ? zoom.onPointerMove : undefined}
+          onPointerUp={zoom.endDrag}
+          onPointerCancel={zoom.endDrag}
+          onDoubleClick={item.type === 'photo' ? zoom.toggle : undefined}
+        >
           {hasPrevious && <button className="viewer-nav viewer-nav-left" type="button" aria-label="Previous item" onClick={() => onChange(items[currentIndex - 1])}><ChevronLeft size={25} /></button>}
           {loading && !error && <div className="viewer-loading"><Cloud size={20} />Loading original…</div>}
           {error ? <div className="viewer-error"><AlertCircle size={22} /><strong>Telegram media unavailable</strong><span>{error}</span><button className="viewer-retry" type="button" onClick={retry}><RefreshCw size={13} /> Try again</button></div> : item.type === 'photo' ? (
-            <img key={`${item.id}-${attempt}`} src={item.telegramUrl} alt={item.name} onLoad={() => setLoading(false)} onError={() => { setLoading(false); setError('Reconnect Telegram and try viewing it again.') }} />
+            <img
+              key={`${item.id}-${attempt}`}
+              src={item.telegramUrl}
+              alt={item.name}
+              draggable={false}
+              style={{
+                transform: `translate(${zoom.offset.x}px, ${zoom.offset.y}px) scale(${zoom.scale})`,
+              }}
+              onLoad={() => setLoading(false)}
+              onError={() => { setLoading(false); setError('Reconnect Telegram and try viewing it again.') }}
+            />
           ) : (
             <video
               key={`${item.id}-${attempt}-${playingOriginal ? 'orig' : 'proxy'}`}
@@ -375,6 +430,15 @@ export function MediaViewer({ item, items, onChange, onClose }: { item: MediaIte
             />
           )}
           {hasNext && <button className="viewer-nav viewer-nav-right" type="button" aria-label="Next item" onClick={() => onChange(items[currentIndex + 1])}><ChevronRight size={25} /></button>}
+        </div>
+        {showInfo && (
+          <ViewerInfo
+            item={item}
+            tags={tags}
+            onFavorite={onFavorite}
+            onDownload={item.downloadUrl ? () => window.open(item.downloadUrl, '_blank') : undefined}
+          />
+        )}
         </div>
         <footer className="viewer-footer"><span>{currentIndex + 1} of {items.length} · {formatDateHeading(item.capturedAt)} · {formatTime(item.capturedAt)}</span><span>{formatSize(item.size)} · Original file</span></footer>
       </section>

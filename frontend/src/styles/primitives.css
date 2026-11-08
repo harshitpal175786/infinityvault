@@ -579,3 +579,172 @@
 .grid-error .btn {
   margin-top: 6px;
 }
+
+/* --- Phase 3: viewer zoom, fullscreen and metadata ---------------------- */
+
+/* The header sits above the body; the body is a horizontal split so the info
+   panel takes width from the stage without shrinking the header's buttons. */
+.viewer-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.viewer-stage.zoomed {
+  cursor: grab;
+  /* Wheel zoom replaces scrolling on the stage itself. */
+  overscroll-behavior: contain;
+}
+
+.viewer-stage.zoomed:active {
+  cursor: grabbing;
+}
+
+.viewer-stage.zoomed img {
+  transition: transform var(--motion-fast) ease-out;
+  will-change: transform;
+  user-select: none;
+  /* Panning past the edge must not select text or start a native image drag. */
+  -webkit-user-drag: none;
+}
+
+.viewer-zoom-label {
+  min-width: 4ch;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--on-viewer-muted);
+}
+
+.viewer-info {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 300px;
+  flex-shrink: 0;
+  padding: 16px;
+  overflow-y: auto;
+  border-left: 1px solid var(--viewer-divider);
+  color: var(--on-viewer);
+}
+
+.viewer-info-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.viewer-info-head h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.viewer-info-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.viewer-info .icon-button {
+  color: var(--on-viewer-muted);
+}
+
+.viewer-info .icon-button:hover {
+  color: var(--on-viewer);
+}
+
+.viewer-info .icon-button.is-active {
+  color: var(--warning);
+}
+
+.viewer-info-desc {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--on-viewer-muted);
+}
+
+.viewer-info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0;
+}
+
+.viewer-info-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--text-xs);
+}
+
+.viewer-info-row dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--on-viewer-subtle);
+}
+
+.viewer-info-row dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.viewer-info-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.viewer-info-tags-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--on-viewer-subtle);
+}
+
+.viewer-info-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.viewer-info-source {
+  margin: auto 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--on-viewer-faint);
+}
+
+/* Metadata becomes a bottom sheet on phones, where a 300px side column would
+   leave no room for the photo. */
+@media (max-width: 767px) {
+  .viewer-body.with-info {
+    flex-direction: column;
+  }
+
+  .viewer-info {
+    width: 100%;
+    max-height: 46vh;
+    border-left: 0;
+    border-top: 1px solid var(--viewer-divider);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewer-stage.zoomed img {
+    transition: none;
+  }
+}

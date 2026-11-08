@@ -465,7 +465,12 @@ function App() {
   async function toggleFavorite(item: MediaItem) {
     try {
       const saved = await updateMedia(item.id, { favorite: !item.isFavorite })
-      setItems((current) => current.map((currentItem) => currentItem.id === item.id ? itemFromApi(saved, mediaUrl) : currentItem))
+      const updated = itemFromApi(saved, mediaUrl)
+      setItems((current) => current.map((currentItem) => currentItem.id === item.id ? updated : currentItem))
+      // The viewer holds its own copy of the item, so without this the star and
+      // the card behind it disagree until the viewer is reopened.
+      setViewingItem((current) => (current && current.id === item.id ? updated : current))
+      setEditingItem((current) => (current && current.id === item.id ? updated : current))
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Favorite state could not be updated.')
     }
@@ -996,7 +1001,13 @@ function App() {
       )}
       {isTelegramOpen && <TelegramModal status={telegramStatus} onConnected={handleTelegramConnected} onDisconnected={handleTelegramDisconnected} onClose={() => setIsTelegramOpen(false)} />}
       {editingItem && <MediaDetailsModal item={editingItem} onSave={saveDetails} onClose={() => setEditingItem(null)} />}
-      {viewingItem && <MediaViewer item={viewingItem} items={filteredItems} onChange={setViewingItem} onClose={() => setViewingItem(null)} />}
+      {viewingItem && <MediaViewer
+        item={viewingItem}
+        items={filteredItems}
+        onChange={setViewingItem}
+        onClose={() => setViewingItem(null)}
+        onFavorite={() => void toggleFavorite(viewingItem)}
+      />}
     </div>
   )
 }
