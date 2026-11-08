@@ -34,6 +34,7 @@ import {
   X,
   Zap,
   ShieldCheck,
+  History,
 } from 'lucide-react'
 import { createMediaItem } from './media'
 import { useTheme } from './hooks/useTheme'
@@ -44,9 +45,12 @@ import { TokenGate } from './components/TokenGate'
 import { PeoplePage } from './components/PeoplePage'
 import { ExplorePage } from './components/ExplorePage'
 import { Sidebar } from './components/Sidebar'
-import { EmptyState, MediaCard, MediaDetailsModal, MediaViewer, TelegramModal } from './components/MediaViews'
+import { EmptyState, SearchEmptyState, MediaCard, MediaDetailsModal, MediaViewer, TelegramModal } from './components/MediaViews'
 import { useLibraryFilters, FILTERS, type Filter, type LibraryView } from './hooks/useLibraryFilters'
 import { useInfiniteScroll } from './hooks/useInfiniteScroll'
+
+/** Local key for recent queries. Nothing is sent to the server. */
+const RECENT_SEARCH_KEY = 'infinityvault.recent-searches'
 import { useToast } from './components/Toast'
 import { ContextMenu, type MenuAction } from './components/ContextMenu'
 import { AlbumsPage } from './components/AlbumsPage'
@@ -96,6 +100,15 @@ function App() {
     clearAdvancedFilters,
     openView,
   } = useLibraryFilters()
+  // Recent queries, kept locally. No backend needed and nothing leaves the machine.
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(RECENT_SEARCH_KEY)
+      const parsed = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string').slice(0, 6) : []
+    } catch { return [] }
+  })
+  const [searchFocused, setSearchFocused] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [isTelegramOpen, setIsTelegramOpen] = useState(false)
   const [people, setPeople] = useState<{ id: string; name: string | null; face_count: number }[]>([])
@@ -329,7 +342,18 @@ function App() {
   // paths never appeared and nothing beyond the current view was findable.
   useEffect(() => {
     const handle = window.setTimeout(() => {
-      setSearchTerm(query.trim())
+      const next = query.trim()
+      setSearchTerm(next)
+      // Remember only queries that actually settled, so a half-typed word never
+      // ends up in the history.
+      if (next.length >= 2) {
+        setRecentSearches((current) => {
+          const deduped = [next, ...current.filter((entry) => entry.toLowerCase() !== next.toLowerCase())]
+          const kept = deduped.slice(0, 6)
+          try { window.localStorage.setItem(RECENT_SEARCH_KEY, JSON.stringify(kept)) } catch { /* private mode */ }
+          return kept
+        })
+      }
     }, 250)
     return () => window.clearTimeout(handle)
   }, [query])
@@ -757,8 +781,48 @@ function App() {
           <div className="topbar-actions">
             <label className="search-field">
               <Search size={17} />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your library" />
-              <kbd>⌘ K</kbd>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onFocus={() => setSearchFocused(true)}
+                /* Delay the close so a click on a suggestion lands before it unmounts. */
+                onBlur={() => window.setTimeout(() => setSearchFocused(false), 150)}
+                placeholder="Search your library"
+              />
+              {query ? (
+                <button type="button" className="search-clear" aria-label="Clear search" onClick={() => setQuery('')}><X size={14} /></button>
+              ) : (
+                <kbd>⌘ K</kbd>
+              )}
+              {searchFocused && !query && recentSearches.length > 0 && (
+                <div className="search-recent" role="listbox" aria-label="Recent searches">
+                  <div className="search-recent-head">
+                    <span>Recent</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecentSearches([])
+                        try { window.localStorage.removeItem(RECENT_SEARCH_KEY) } catch { /* private mode */ }
+                      }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  {recentSearches.map((entry) => (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      key={entry}
+                      className="search-recent-item"
+                      onClick={() => { setQuery(entry); setSearchFocused(false) }}
+                    >
+                      <History size={13} />
+                      <span>{entry}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </label>
             <button
               className={filtersOpen ? 'icon-button header-tool active' : 'icon-button header-tool'}
@@ -1033,7 +1097,15 @@ function App() {
                 </div>
               </section>
             )) : (
-              <EmptyState onUpload={() => fileInputRef.current?.click()} />
+              searchTerm.trim() ? (
+                <SearchEmptyState
+                  term={searchTerm.trim()}
+                  activeFilterCount={buildFilterParams() ? Object.keys(buildFilterParams()).length : 0}
+                  onClear={() => setSearchTerm('')}
+                />
+              ) : (
+                <EmptyState onUpload={() => fileInputRef.current?.click()} />
+              )
             )}
             {nextCursor && (
               <div className="load-more" ref={loadMoreSentinelRef}>

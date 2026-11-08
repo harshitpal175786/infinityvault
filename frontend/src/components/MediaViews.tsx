@@ -25,6 +25,7 @@ import {
   ZoomIn,
   ZoomOut,
   RefreshCw,
+  SearchX,
   Send,
   Star,
   Upload,
@@ -442,6 +443,39 @@ export function MediaViewer({ item, items, onChange, onClose, onFavorite, tags }
         </div>
         <footer className="viewer-footer"><span>{currentIndex + 1} of {items.length} · {formatDateHeading(item.capturedAt)} · {formatTime(item.capturedAt)}</span><span>{formatSize(item.size)} · Original file</span></footer>
       </section>
+    </div>
+  )
+}
+
+/**
+ * Empty state for a query that matched nothing.
+ *
+ * The generic "your timeline starts here" message is misleading when the
+ * library is full and only the search came up empty, so this version names the
+ * query and offers to clear it.
+ */
+export function SearchEmptyState({
+  term,
+  onClear,
+  activeFilterCount,
+}: {
+  term: string
+  onClear: () => void
+  activeFilterCount: number
+}) {
+  return (
+    <div className="empty-state">
+      <div className="empty-icon"><SearchX size={25} /></div>
+      <h3>No matches for “{term}”</h3>
+      <p>
+        Search looks at file names, captions and folder paths.
+        {activeFilterCount > 0
+          ? ` ${activeFilterCount} ${activeFilterCount === 1 ? 'filter is' : 'filters are'} also active, which can hide results that would otherwise match.`
+          : ''}
+      </p>
+      <button className="empty-upload" type="button" onClick={onClear}>
+        <X size={16} /> Clear search
+      </button>
     </div>
   )
 }
