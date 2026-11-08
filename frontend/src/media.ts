@@ -8,6 +8,9 @@ type ExifData = {
   OffsetTime?: string
   latitude?: number
   longitude?: number
+  Make?: string
+  Model?: string
+  LensModel?: string
 }
 
 type MediaMetadata = {
@@ -17,6 +20,16 @@ type MediaMetadata = {
   duration?: number
   latitude?: number
   longitude?: number
+  cameraMake?: string
+  cameraModel?: string
+  lensModel?: string
+}
+
+/** EXIF pads these with NULs and spaces; drop the empties entirely. */
+function cleanTag(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const cleaned = value.replace(/\0/g, ' ').trim()
+  return cleaned || undefined
 }
 
 /**
@@ -49,7 +62,7 @@ async function readImageMetadata(file: File): Promise<MediaMetadata> {
   try {
     exif = await exifr.parse(file, [
       'DateTimeOriginal', 'CreateDate', 'OffsetTimeOriginal', 'OffsetTime',
-      'latitude', 'longitude',
+      'latitude', 'longitude', 'Make', 'Model', 'LensModel',
     ])
   } catch {
     // Some images do not contain readable EXIF data. The file timestamp is used below.
@@ -58,16 +71,21 @@ async function readImageMetadata(file: File): Promise<MediaMetadata> {
   const capturedAt = asDate(exif?.DateTimeOriginal, exif?.OffsetTimeOriginal ?? exif?.OffsetTime)
     ?? asDate(exif?.CreateDate, exif?.OffsetTime)
   const coordinates = readCoordinates(exif ?? {})
+  const camera = {
+    cameraMake: cleanTag(exif?.Make),
+    cameraModel: cleanTag(exif?.Model),
+    lensModel: cleanTag(exif?.LensModel),
+  }
 
   return new Promise((resolve) => {
     const image = new Image()
     image.onload = () => {
       URL.revokeObjectURL(image.src)
-      resolve({ capturedAt, width: image.naturalWidth, height: image.naturalHeight, ...coordinates })
+      resolve({ capturedAt, width: image.naturalWidth, height: image.naturalHeight, ...coordinates, ...camera })
     }
     image.onerror = () => {
       URL.revokeObjectURL(image.src)
-      resolve({ capturedAt, ...coordinates })
+      resolve({ capturedAt, ...coordinates, ...camera })
     }
     image.src = URL.createObjectURL(file)
   })
@@ -119,6 +137,9 @@ export async function createMediaItem(file: File): Promise<MediaItem | undefined
     duration: type === 'video' ? metadata.duration : undefined,
     latitude: metadata.latitude,
     longitude: metadata.longitude,
+    cameraMake: metadata.cameraMake,
+    cameraModel: metadata.cameraModel,
+    lensModel: metadata.lensModel,
     file,
     uploadStatus: 'local',
     isFavorite: false,

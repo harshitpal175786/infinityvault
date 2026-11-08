@@ -203,6 +203,9 @@ def init_db() -> None:
             "folder_path": "ALTER TABLE media_items ADD COLUMN folder_path TEXT",
             "latitude": "ALTER TABLE media_items ADD COLUMN latitude REAL",
             "longitude": "ALTER TABLE media_items ADD COLUMN longitude REAL",
+            "camera_make": "ALTER TABLE media_items ADD COLUMN camera_make TEXT",
+            "camera_model": "ALTER TABLE media_items ADD COLUMN camera_model TEXT",
+            "lens_model": "ALTER TABLE media_items ADD COLUMN lens_model TEXT",
             "file_state": "ALTER TABLE media_items ADD COLUMN file_state TEXT NOT NULL DEFAULT 'present'",
             "thumb_state": "ALTER TABLE media_items ADD COLUMN thumb_state TEXT NOT NULL DEFAULT 'pending'",
             "integrity_state": "ALTER TABLE media_items ADD COLUMN integrity_state TEXT",
@@ -259,6 +262,21 @@ def delete_telegram_connection(client_id: str) -> None:
         connection.commit()
 
 
+def clean_camera_field(value: str | None) -> str | None:
+    """Normalise an EXIF camera string.
+
+    Cameras pad these with NUL bytes and trailing spaces, and plenty of exports
+    write "   " instead of omitting the tag. Storing that would create filter
+    options that render as blank.
+    """
+    if not value:
+        return None
+    cleaned = str(value).replace("\x00", " ").strip()
+    if not cleaned:
+        return None
+    return cleaned[:100]
+
+
 def normalize_coordinates(
     latitude: float | None, longitude: float | None
 ) -> tuple[float | None, float | None]:
@@ -296,6 +314,9 @@ def create_media(
     checksum: str,
     latitude: float | None = None,
     longitude: float | None = None,
+    camera_make: str | None = None,
+    camera_model: str | None = None,
+    lens_model: str | None = None,
 ) -> str:
     media_id = str(uuid4())
     now = utc_now()
@@ -306,8 +327,9 @@ def create_media(
             INSERT INTO media_items
                 (id, client_id, original_name, media_type, mime_type, size_bytes,
                 capture_time, capture_source, width, height, duration, local_path, checksum,
-                latitude, longitude, upload_status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+                latitude, longitude, camera_make, camera_model, lens_model,
+                upload_status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
             """,
             (
                 media_id,
@@ -325,6 +347,9 @@ def create_media(
                 checksum,
                 latitude,
                 longitude,
+                clean_camera_field(camera_make),
+                clean_camera_field(camera_model),
+                clean_camera_field(lens_model),
                 now,
                 now,
             ),
@@ -431,6 +456,7 @@ def build_media_filters(
     media_type: str | None = None,
     has_faces: bool | None = None,
     has_location: bool | None = None,
+    camera: str | None = None,
 ) -> tuple[list[str], list[Any]]:
     """SQL fragments for the library filters.
 
@@ -463,7 +489,39 @@ def build_media_filters(
     elif has_location is False:
         clauses.append("AND (latitude IS NULL OR longitude IS NULL)")
 
+    if camera:
+        # Match a make/model pair, so "Apple" selects every iPhone while
+        # "Apple iPhone 15 Pro" selects just that body.
+        clauses.append("AND (camera_make = ? OR camera_model = ?)")
+        parameters.extend([camera, camera])
+
     return clauses, parameters
+
+
+def camera_options(client_id: str) -> list[dict[str, Any]]:
+    """Distinct cameras actually present, with counts, for the filter menu.
+
+    Built from the library rather than a fixed list so the dropdown can never
+    offer a camera the user does not own.
+    """
+    with closing(open_db()) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                COALESCE(NULLIF(camera_model, ''), NULLIF(camera_make, '')) AS label,
+                camera_make, camera_model, COUNT(*) AS total
+            FROM media_items
+            WHERE client_id = ? AND COALESCE(trashed_at, '') = ''
+              AND (COALESCE(camera_model, '') <> '' OR COALESCE(camera_make, '') <> '')
+            GROUP BY label
+            ORDER BY total DESC, label
+            """,
+            (client_id,),
+        ).fetchall()
+    return [
+        {"label": row["label"], "make": row["camera_make"], "model": row["camera_model"], "count": row["total"]}
+        for row in rows
+    ]
 
 
 def list_media_page(
@@ -479,6 +537,7 @@ def list_media_page(
     has_faces: bool | None = None,
     has_location: bool | None = None,
     sort: str = "newest",
+    camera: str | None = None,
 ) -> tuple[list[sqlite3.Row], str | None]:
     """One page of media, newest first, using a keyset cursor.
 
@@ -518,6 +577,7 @@ def list_media_page(
         media_type=media_type,
         has_faces=has_faces,
         has_location=has_location,
+        camera=camera,
     )
     extra_filter = "".join(filter_fragments)
     parameters.extend(filter_parameters)
@@ -1752,6 +1812,31 @@ def photos_missing_gps(client_id: str) -> list[sqlite3.Row]:
             """,
             (client_id,),
         ).fetchall())
+
+
+def photos_missing_camera(client_id: str) -> list[sqlite3.Row]:
+    with closing(open_db()) as connection:
+        return list(connection.execute(
+            """
+            SELECT id, local_path FROM media_items
+            WHERE client_id = ? AND media_type = 'photo'
+              AND COALESCE(camera_model, '') = '' AND COALESCE(camera_make, '') = ''
+              AND file_state = 'present'
+            ORDER BY capture_time DESC
+            """,
+            (client_id,),
+        ).fetchall())
+
+
+def set_media_camera(
+    media_id: str, make: str | None, model: str | None, lens: str | None
+) -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            "UPDATE media_items SET camera_make = ?, camera_model = ?, lens_model = ?, updated_at = ? WHERE id = ?",
+            (clean_camera_field(make), clean_camera_field(model), clean_camera_field(lens), utc_now(), media_id),
+        )
+        connection.commit()
 
 
 def set_media_coordinates(media_id: str, latitude: float, longitude: float) -> None:

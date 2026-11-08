@@ -23,6 +23,9 @@ export type MediaItem = {
   /** EXIF GPS, when the original carried it. 0,0 is treated as unknown. */
   latitude?: number
   longitude?: number
+  cameraMake?: string
+  cameraModel?: string
+  lensModel?: string
   file?: File
   uploadStatus: UploadStatus
   /** 'missing' means the local copy is gone; metadata is still intact. */

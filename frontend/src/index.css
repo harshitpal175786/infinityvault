@@ -2653,3 +2653,30 @@
   .filter-field input,
   .filter-field select { min-width: 116px; }
 }
+
+/* Clustered pins: a bubble stands in for many photos in one spot, so a
+   single dense location does not stack invisible pins on one pixel. */
+.map-cluster {
+  width: 38px;
+  height: 38px;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: 0 0 0 4px var(--primary-soft);
+}
+
+.map-cluster-count {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.explore-head-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.explore-head-actions .ghost-button {
+  margin-top: 0;
+}

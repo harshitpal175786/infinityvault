@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Camera, Copy, Loader2, MapPin, RefreshCw, Sparkles } from 'lucide-react'
-import { backfillGeo, listDuplicates, listGeoPoints, listMemories, listRecentlyAdded, mediaUrl } from '../api'
+import { backfillCameras, backfillGeo, listDuplicates, listGeoPoints, listMemories, listRecentlyAdded, mediaUrl } from '../api'
 import type { ApiMedia, DuplicateGroup, GeoPoint } from '../api'
 
 type ExplorePageProps = {
@@ -23,6 +23,42 @@ function formatBytes(bytes: number): string {
  * Without tiles this is a relative-arrangement view, not a street map, and the
  * copy says so rather than implying more than it can show.
  */
+type MapCluster = {
+  key: string
+  left: number
+  top: number
+  points: GeoPoint[]
+}
+
+/**
+ * Group points that project closer together than `cell` percent.
+ *
+ * Without this, a library shot in one city stacks dozens of pins on the same
+ * pixel: only the last one is clickable and the map reads as a single blob.
+ * A grid is enough here because the map is a relative arrangement, not a
+ * projected geography, so pixel distance is the only thing that matters.
+ */
+function clusterPoints(
+  projected: { point: GeoPoint; left: number; top: number }[],
+  cell = 7,
+): MapCluster[] {
+  const buckets = new Map<string, MapCluster>()
+  for (const { point, left, top } of projected) {
+    const key = `${Math.floor(left / cell)}:${Math.floor(top / cell)}`
+    const existing = buckets.get(key)
+    if (existing) {
+      existing.points.push(point)
+      // Recentre on the running mean so a cluster sits on its members.
+      const n = existing.points.length
+      existing.left += (left - existing.left) / n
+      existing.top += (top - existing.top) / n
+    } else {
+      buckets.set(key, { key, left, top, points: [point] })
+    }
+  }
+  return Array.from(buckets.values())
+}
+
 function ProjectedMap({ points, onOpen }: { points: GeoPoint[]; onOpen: (point: GeoPoint) => void }) {
   const { markers } = useMemo(() => {
     if (points.length === 0) return { markers: [] }
@@ -39,29 +75,42 @@ function ProjectedMap({ points, onOpen }: { points: GeoPoint[]; onOpen: (point: 
     // Map the span into 6%..94% rather than 0..100 so the outermost pins are
     // fully visible: a pin centred at 0% would hang half outside the box.
     const inset = (fraction: number) => 6 + fraction * 88
-    return {
-      markers: points.map((point) => ({
-        point,
-        left: inset((point.longitude - minLon) / lonSpan),
-        top: inset(1 - (point.latitude - minLat) / latSpan),
-      })),
-    }
+    const projected = points.map((point) => ({
+      point,
+      left: inset((point.longitude - minLon) / lonSpan),
+      top: inset(1 - (point.latitude - minLat) / latSpan),
+    }))
+    return { markers: clusterPoints(projected) }
   }, [points])
 
   return (
     <div className="explore-map">
-      {markers.map(({ point, left, top }) => (
-        <button
-          key={point.id}
-          type="button"
-          className="map-pin"
-          style={{ left: `${left}%`, top: `${top}%` }}
-          onClick={() => onOpen(point)}
-          title={`${point.name} · ${point.captured_at.slice(0, 10)}`}
-        >
-          {point.thumb_ready ? <img src={mediaUrl(point.preview_url)} alt="" loading="lazy" /> : <MapPin size={11} />}
-        </button>
-      ))}
+      {markers.map((cluster) => {
+        const single = cluster.points[0]
+        const count = cluster.points.length
+        return (
+          <button
+            key={cluster.key}
+            type="button"
+            className={count > 1 ? 'map-pin map-cluster' : 'map-pin'}
+            style={{ left: `${cluster.left}%`, top: `${cluster.top}%` }}
+            onClick={() => onOpen(count > 1 ? cluster.points[0] : single)}
+            title={
+              count > 1
+                ? `${count} photos near here — showing the newest`
+                : `${single.name} · ${single.captured_at.slice(0, 10)}`
+            }
+          >
+            {count > 1 ? (
+              <span className="map-cluster-count">{count}</span>
+            ) : single.thumb_ready ? (
+              <img src={mediaUrl(single.preview_url)} alt="" loading="lazy" />
+            ) : (
+              <MapPin size={11} />
+            )}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -72,7 +121,7 @@ export function ExplorePage({ onNotice, onOpenMedia }: ExplorePageProps) {
   const [recent, setRecent] = useState<ApiMedia[]>([])
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([])
   const [loading, setLoading] = useState(true)
-  const [busy, setBusy] = useState<'geo' | null>(null)
+  const [busy, setBusy] = useState<'geo' | 'camera' | null>(null)
 
   const load = useCallback(async () => {
     const [nextPoints, nextMemories, nextRecent, nextDuplicates] = await Promise.all([
@@ -106,6 +155,22 @@ export function ExplorePage({ onNotice, onOpenMedia }: ExplorePageProps) {
       await load()
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'Locations could not be recovered.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function runCameraBackfill() {
+    setBusy('camera')
+    try {
+      const result = await backfillCameras()
+      onNotice(
+        result.labeled > 0
+          ? `Recorded the camera for ${result.labeled} photo${result.labeled === 1 ? '' : 's'}.`
+          : 'No photos are waiting for a camera label.',
+      )
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : 'Camera details could not be read.')
     } finally {
       setBusy(null)
     }
@@ -152,9 +217,14 @@ export function ExplorePage({ onNotice, onOpenMedia }: ExplorePageProps) {
               : `${points.length} photo${points.length === 1 ? '' : 's'} with a location.`}{' '}
             Positions are relative to each other — no map tiles are downloaded, so your locations stay on this machine.
           </p>
-          <button type="button" className="ghost-button" onClick={() => void runBackfill()} disabled={busy !== null}>
-            <RefreshCw size={13} /> {busy === 'geo' ? 'Reading…' : 'Find locations in existing photos'}
-          </button>
+          <div className="explore-head-actions">
+            <button type="button" className="ghost-button" onClick={() => void runBackfill()} disabled={busy !== null}>
+              <RefreshCw size={13} /> {busy === 'geo' ? 'Reading…' : 'Find locations in existing photos'}
+            </button>
+            <button type="button" className="ghost-button" onClick={() => void runCameraBackfill()} disabled={busy !== null}>
+              <Camera size={13} /> {busy === 'camera' ? 'Reading…' : 'Find cameras in existing photos'}
+            </button>
+          </div>
         </header>
         {points.length > 0 && (
           <ProjectedMap

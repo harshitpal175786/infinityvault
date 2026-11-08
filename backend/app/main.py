@@ -190,6 +190,39 @@ def health() -> dict[str, str]:
 # place meant an authenticated request with no header silently read whatever
 # rows were stored under that id -- the request still succeeded, which hid the
 # mistake. Requests must now name the id explicitly.
+def read_image_camera(path: Path) -> tuple[str | None, str | None, str | None]:
+    """Pull Make/Model/LensModel out of an image's EXIF.
+
+    Returns (make, model, lens), any of which may be None.
+    """
+    try:
+        from PIL import Image, ExifTags  # noqa: PLC0415
+    except ImportError:
+        return None, None, None
+
+    try:
+        with Image.open(path) as image:
+            exif = image.getexif()
+            if not exif:
+                return None, None, None
+            tags = {ExifTags.TAGS.get(key, key): value for key, value in exif.items()}
+    except Exception:
+        return None, None, None
+
+    def pick(*names: str) -> str | None:
+        for name in names:
+            value = tags.get(name)
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", "ignore")
+            if isinstance(value, str):
+                cleaned = value.replace("\x00", " ").strip()
+                if cleaned:
+                    return cleaned[:100]
+        return None
+
+    return pick("Make"), pick("Model"), pick("LensModel")
+
+
 def read_image_coordinates(path: Path) -> tuple[float, float] | None:
     """Pull GPS out of an image's EXIF, if it has a usable fix.
 
@@ -326,6 +359,7 @@ def get_media(
     media_type: str | None = Query(default=None),
     has_faces: bool | None = Query(default=None),
     has_location: bool | None = Query(default=None),
+    camera: str | None = Query(default=None),
     sort: str = Query(default="newest"),
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
     query_client_id: str | None = Query(default=None, alias="client_id"),
@@ -349,6 +383,7 @@ def get_media(
             media_type=media_type,
             has_faces=has_faces,
             has_location=has_location,
+            camera=camera,
             sort=sort,
         )
         return [db.row_to_media(row) for row in rows]
@@ -366,6 +401,7 @@ def get_media(
             media_type=media_type,
             has_faces=has_faces,
             has_location=has_location,
+            camera=camera,
             sort=sort,
         )
     except ValueError as error:
@@ -386,6 +422,9 @@ async def upload_media(
     duration: float | None = Form(default=None),
     latitude: float | None = Form(default=None),
     longitude: float | None = Form(default=None),
+    camera_make: str | None = Form(default=None),
+    camera_model: str | None = Form(default=None),
+    lens_model: str | None = Form(default=None),
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
 ) -> dict:
     client_id = resolve_client_id(client_id)
@@ -439,6 +478,9 @@ async def upload_media(
         checksum=checksum,
         latitude=latitude,
         longitude=longitude,
+        camera_make=camera_make,
+        camera_model=camera_model,
+        lens_model=lens_model,
     )
     # Thumbnails are generated in the background for photos and videos alike.
     try:
@@ -910,6 +952,36 @@ def geo_points(
         }
         for row in db.geotagged_points(client_id)
     ]
+
+
+@app.post("/api/cameras/backfill")
+def cameras_backfill(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    limit: int = Query(default=500, ge=1, le=5000),
+) -> dict:
+    """Read camera make/model out of local originals uploaded before capture."""
+    client_id = resolve_client_id(client_id, query_client_id=None)
+    candidates = db.photos_missing_camera(client_id)[:limit]
+    found = 0
+    for row in candidates:
+        path = db.resolve_local_path(row["local_path"])
+        if not path or not path.is_file():
+            continue
+        make, model, lens = read_image_camera(path)
+        if not (make or model or lens):
+            continue
+        db.set_media_camera(row["id"], make, model, lens)
+        found += 1
+    return {"checked": len(candidates), "labeled": found, "remaining": len(db.photos_missing_camera(client_id))}
+
+
+@app.get("/api/cameras")
+def cameras(
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+) -> list[dict]:
+    """Cameras present in the library, most-used first."""
+    return db.camera_options(resolve_client_id(client_id, query_client_id))
 
 
 @app.get("/api/duplicates")

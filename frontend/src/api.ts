@@ -214,6 +214,9 @@ export async function uploadMedia(item: MediaItem): Promise<ApiMedia> {
   if (item.duration !== undefined) form.append('duration', String(item.duration))
   if (item.latitude !== undefined) form.append('latitude', String(item.latitude))
   if (item.longitude !== undefined) form.append('longitude', String(item.longitude))
+  if (item.cameraMake) form.append('camera_make', item.cameraMake)
+  if (item.cameraModel) form.append('camera_model', item.cameraModel)
+  if (item.lensModel) form.append('lens_model', item.lensModel)
   return request<ApiMedia>('/api/media', { method: 'POST', body: form })
 }
 
@@ -424,6 +427,7 @@ export type MediaFilterParams = {
   mediaType?: 'photo' | 'video'
   hasFaces?: boolean
   hasLocation?: boolean
+  camera?: string
   sort?: 'newest' | 'oldest'
 }
 
@@ -434,6 +438,17 @@ export function filterQuery(filters: MediaFilterParams): string {
   if (filters.mediaType) params.set('media_type', filters.mediaType)
   if (filters.hasFaces !== undefined) params.set('has_faces', String(filters.hasFaces))
   if (filters.hasLocation !== undefined) params.set('has_location', String(filters.hasLocation))
+  if (filters.camera) params.set('camera', filters.camera)
   if (filters.sort) params.set('sort', filters.sort)
   return params.toString()
+}
+
+export type CameraOption = { label: string; make: string | null; model: string | null; count: number }
+
+export function listCameras(): Promise<CameraOption[]> {
+  return request<CameraOption[]>('/api/cameras')
+}
+
+export function backfillCameras(): Promise<{ checked: number; labeled: number; remaining: number }> {
+  return request('/api/cameras/backfill', { method: 'POST' })
 }

@@ -43,8 +43,8 @@ import { UtilitiesPage } from './components/UtilitiesPage'
 import { TokenGate } from './components/TokenGate'
 import { PeoplePage } from './components/PeoplePage'
 import { ExplorePage } from './components/ExplorePage'
-import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listMedia, listMediaPage, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
-import type { Album, ApiMedia, MediaFilterParams, Tag, TelegramAuthResponse, TelegramStatus } from './api'
+import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listCameras, listMedia, listMediaPage, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
+import type { Album, ApiMedia, CameraOption, MediaFilterParams, Tag, TelegramAuthResponse, TelegramStatus } from './api'
 import type { MediaItem, MediaType, UploadStatus } from './types'
 
 type Filter = 'all' | MediaType
@@ -149,6 +149,7 @@ function App() {
   const [libraryView, setLibraryView] = useState<LibraryView>('library')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [advancedFilters, setAdvancedFilters] = useState<MediaFilterParams>({})
+  const [cameras, setCameras] = useState<CameraOption[]>([])
   const [activeAlbumId, setActiveAlbumId] = useState<string>()
   const [albums, setAlbums] = useState<Album[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -206,11 +207,12 @@ function App() {
     const seq = ++requestSeq.current
     try {
       const mediaView = libraryView === 'album' ? 'library' : libraryView
-      const [page, savedTelegramStatus, savedAlbums, savedTags] = await Promise.all([
+      const [page, savedTelegramStatus, savedAlbums, savedTags, savedCameras] = await Promise.all([
         listMediaPage(mediaView, searchTerm, activeAlbumId, null, 200, advancedFilters),
         getTelegramStatus(),
         listAlbums(),
         listTags(),
+        listCameras().catch(() => []),
       ])
       if (seq !== requestSeq.current) return
 
@@ -254,6 +256,7 @@ function App() {
       setTelegramStatus(savedTelegramStatus)
       setAlbums(savedAlbums)
       setTags(savedTags)
+      setCameras(savedCameras)
     } catch (error) {
       if (showError && seq === requestSeq.current) {
         setNotice(error instanceof Error ? error.message : 'The local service is not available yet.')
@@ -812,6 +815,20 @@ function App() {
                 <option value="">Any</option>
                 <option value="true">Has location</option>
                 <option value="false">No location</option>
+              </select>
+            </label>
+            <label className="filter-field">
+              <span>Camera</span>
+              <select
+                value={advancedFilters.camera ?? ''}
+                onChange={(event) => setAdvancedFilters((f) => ({ ...f, camera: event.target.value || undefined }))}
+              >
+                <option value="">Any</option>
+                {cameras.map((option) => (
+                  <option key={option.label} value={option.label}>
+                    {option.label} ({option.count})
+                  </option>
+                ))}
               </select>
             </label>
             <label className="filter-field">

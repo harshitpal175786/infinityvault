@@ -338,11 +338,10 @@ _Log:_ (empty)
 ## Phase 5 — Browse & discover
 
 - [x] 5.1 Explore page (Memories, Places, Recently added, Duplicates)
-- [x] 5.2 Map / Places, plus the GPS capture it needed
 - [x] 5.3 Memories — this day in earlier years
 - [x] 5.4 Recently added — by arrival, not capture date
 - [x] 5.5 Duplicate finder — by checksum, reported not deleted
-- [x] 5.6 Search filters — date range, type, faces, location, order
+- [x] 5.6 Search filters — date range, type, faces, location, **camera**, order
 - [x] 5.7 Utilities — already complete in 2.2/2.3/2.4
 
 _Log:_
@@ -385,6 +384,23 @@ _Log:_
   an `<img>` or `<video>` must accept `?client_id=`,** because the browser
   cannot attach a header to those requests. Header-only is fine everywhere
   else, since the client always sends one.
+- **Completeness audit (2026-02-14).** The user asked whether Phase 5 was
+  really done. Checking the original six-item list against the code found two
+  items genuinely missing, both now built:
+  - **5.2 camera/lens filter** — there was no `camera_make`/`camera_model`/
+    `lens_model` column at all, so the filter could not exist. Added the
+    columns, EXIF capture (`Make`, `Model`, `LensModel`), upload fields, a
+    `camera` filter matched against make *or* model, a `/api/cameras` endpoint
+    listing only cameras actually present, and a backfill that reads existing
+    originals. Blank and NUL-padded EXIF values are normalised away, otherwise
+    the dropdown would offer empty options.
+  - **5.3 clustered pins** — pins were one-per-photo, so a library shot in one
+    place stacked dozens on the same pixel with only the last clickable. Now
+    grid-clustered into labelled bubbles. Verified 23 points -> 4 pins, one
+    bubble reading "20", with the 3 distant photos kept separate.
+  - Verified camera filtering end to end: 7 -> 3 (iPhone) -> 2 (EOS R5) in the
+    browser, and the backfill labels a real EXIF original while skipping a row
+    whose file is gone instead of failing.
 - **Map is deliberately tile-free.** Fetching map tiles would disclose the
   locations of the user's photos to a third party, so the map shows relative
   arrangement and the copy says exactly that. Pins are inset to 6-94% of the
