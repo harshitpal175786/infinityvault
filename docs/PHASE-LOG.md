@@ -17,33 +17,28 @@
 | 1. Trust the library | ✅ Done | — | 1.1 + 1.2 verified |
 | 1.1 `local_path` reconciliation | ✅ | — | Verified on real DB |
 | 1.2 Pagination | ✅ | — | Verified in browser |
-| 2. Telegram cold store | ✅ Done | — | 2.1 + 2.2 verified |
+| 2. Telegram cold store | ✅ Done | — | 2.1–2.4 verified |
 | 2.1 Thumbnails | ✅ | — | Grid never fetches originals |
 | 2.2 Integrity check | ✅ | — | Utilities page |
 | 2.3 Disaster recovery | ✅ | — | Backup + restore verified |
 | 2.4 Auto-backup | ✅ | — | Throttled by change count |
-| 3 Auth (token) | ✅ | — | Bearer token, verified end to end |
-| 4 People UI | ✅ | — | Grid, rename, merge, detail |
-| 5.1 GPS capture | ✅ | — | EXIF → upload → DB + backfill |
-| 5.2 Search filters | ✅ | — | Date, type, faces, location, order |
-| 5.3 Explore | ✅ | — | Memories, Places, Recently added, Duplicates |
-| 3. Identity / auth | ⬜ Not started | — | Deploy gate |
-| 3.1 Token auth | ⬜ | — | |
-| 3.2 Single-user cleanup | ⬜ | — | |
-| 4. Faces & People UI | ⬜ Not started | — | Backend done |
-| 4.1 People grid | ⬜ | — | |
-| 4.2 Person detail | ⬜ | — | |
-| 4.3 Scan controls | ⬜ | — | |
-| 5. Browse & discover | ⬜ Not started | — | |
-| 5.1 Explore | ⬜ | — | |
-| 5.2 Map / Places | ⬜ | — | |
-| 5.3 Memories | ⬜ | — | |
-| 5.4 Recently added | ⬜ | — | |
-| 5.5 Duplicate finder | ⬜ | — | |
-| 5.6 Search filters | ⬜ | — | |
-| 5.7 Utilities | ⬜ | — | |
-| 6. Video | ⬜ Not started | — | Optional, last |
-| 7. UI refactor | ⬜ Not started | — | After UI settles |
+| 3. Identity / auth | ✅ Done | — | Bearer token, verified end to end |
+| 3.1 Token auth | ✅ | — | 401/200/400 matrix verified |
+| 3.2 Single-user cleanup | ✅ | — | Zero `local-user` defaults remain |
+| 4. Faces & People UI | ✅ Done | — | Backend + UI |
+| 4.1 People grid | ✅ | — | Sorted by face count |
+| 4.2 Person detail | ✅ | — | Photo strip per person |
+| 4.3 Scan controls | ✅ | — | Analyse + Group, progress polling |
+| 5. Browse & discover | ✅ Done | — | All sub-phases |
+| 5.1 Explore | ✅ | — | Memories, Places, Recent, Duplicates |
+| 5.2 Map / Places | ✅ | — | Tile-free, relative arrangement |
+| 5.3 Memories | ✅ | — | This day in earlier years |
+| 5.4 Recently added | ✅ | — | By arrival, not capture date |
+| 5.5 Duplicate finder | ✅ | — | Reported, never auto-deleted |
+| 5.6 Search filters | ✅ | — | Date, type, faces, location, order |
+| 5.7 Utilities | ✅ | — | Integrity, backup, restore |
+| 6. Video proxies | ⬜ Not started | — | Optional, last |
+| 7. UI refactor | ⬜ Not started | — | `App.tsx` is ~1,100 lines |
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⏸ blocked
 
@@ -342,11 +337,58 @@ _Log:_ (empty)
 
 ## Phase 5 — Browse & discover
 
-- [ ] 5.1 Explore · [ ] 5.2 Map/Places · [ ] 5.3 Memories
-- [ ] 5.4 Recently added · [ ] 5.5 Duplicate finder
-- [ ] 5.6 Search filters · [ ] 5.7 Utilities
+- [x] 5.1 Explore page (Memories, Places, Recently added, Duplicates)
+- [x] 5.2 Map / Places, plus the GPS capture it needed
+- [x] 5.3 Memories — this day in earlier years
+- [x] 5.4 Recently added — by arrival, not capture date
+- [x] 5.5 Duplicate finder — by checksum, reported not deleted
+- [x] 5.6 Search filters — date range, type, faces, location, order
+- [x] 5.7 Utilities — already complete in 2.2/2.3/2.4
 
-_Log:_ (empty)
+_Log:_
+- 2026-02-14 — The `latitude`/`longitude` columns existed since the first
+  schema but **nothing ever wrote to them**: no EXIF reader, no upload field,
+  no writer. Map had no data and could not have had any, so GPS capture came
+  first and the views second.
+- GPS is rejected when it is 0,0 (the "no fix" value EXIF writers emit, which
+  would put a pin in the Gulf of Guinea) or out of range, rather than stored
+  and rendered as a real location.
+- Verified EXIF round trip with a real geotagged JPEG: 28.614, 77.209 read back
+  correctly, and S/W hemisphere refs flip the sign (-33.87, -151.2).
+- Verified backfill against a live DB: one row with EXIF GPS and empty columns
+  was located and persisted, leaving 0 remaining.
+- Verified filters over HTTP: photos 8, videos 1, has-location 6, 2024-only 1,
+  and both sort orders. Sort-aware keyset paging returns all 7 rows with no
+  duplicates in either direction, and oldest is the exact reverse of newest.
+- **Live bug found and fixed:** `media_thumbnail`, `media_micro_thumbnail`,
+  `telegram_media_content` and `geo_points` all declared a `?client_id=` query
+  parameter and then called `resolve_client_id(client_id)` without it. Every
+  image request using the query-param path -- the *only* path `<img>` and
+  `<video>` can use, since they cannot set headers -- returned 400. This
+  predates Phase 5; it surfaced here because Explore loads images directly.
+  Verified 400 -> 200 on the query path, with the header path and the
+  400-when-missing case still correct.
+- **Two frontend bugs found by testing, both fixed:**
+  1. Filters changed the request but not the list, because the poll merges
+     "pages already loaded" back in, re-adding rows the filter excluded.
+  2. "Oldest first" still rendered newest-first, twice over: `filteredItems`
+     re-sorted locally after the server had already sorted, and the date
+     grouping re-sorted by its own flag. Both now defer to the server order.
+- **Second pass on the same bug class:** `face_thumbnail` also lacked the
+  query fallback, so the People grid's face crops -- rendered as `<img>` --
+  would 400 whenever the header was absent. `duplicates`, `memories` and
+  `recently-added` were header-only too; not broken today, but inconsistent
+  with `geo_points` in exactly the way that produced the bug above. All four
+  now accept both, and a sweep of all 45 routes finds no route that accepts
+  `?client_id=` and ignores it.
+- The rule, now applied consistently: **any endpoint whose URL is loaded into
+  an `<img>` or `<video>` must accept `?client_id=`,** because the browser
+  cannot attach a header to those requests. Header-only is fine everywhere
+  else, since the client always sends one.
+- **Map is deliberately tile-free.** Fetching map tiles would disclose the
+  locations of the user's photos to a third party, so the map shows relative
+  arrangement and the copy says exactly that. Pins are inset to 6-94% of the
+  span after measurement showed 3 of 6 clipped at the edges.
 
 ---
 

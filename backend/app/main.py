@@ -915,9 +915,10 @@ def geo_points(
 @app.get("/api/duplicates")
 def duplicates(
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> list[dict]:
     """Media stored more than once, reported but never auto-deleted."""
-    return db.duplicate_groups(resolve_client_id(client_id))
+    return db.duplicate_groups(resolve_client_id(client_id, query_client_id))
 
 
 @app.get("/api/memories")
@@ -925,9 +926,10 @@ def memories(
     month: int | None = Query(default=None, ge=1, le=12),
     day: int | None = Query(default=None, ge=1, le=31),
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> dict:
     """Photos from this day in earlier years."""
-    client_id = resolve_client_id(client_id)
+    client_id = resolve_client_id(client_id, query_client_id)
     today = datetime.now()
     rows = db.on_this_day(client_id, month or today.month, day or today.day)
     return {
@@ -941,9 +943,13 @@ def memories(
 def recently_added(
     limit: int = Query(default=60, ge=1, le=500),
     client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
 ) -> list[dict]:
     """Newest arrivals by library date, not capture date."""
-    return [db.row_to_media(row) for row in db.recently_added(resolve_client_id(client_id), limit)]
+    return [
+        db.row_to_media(row)
+        for row in db.recently_added(resolve_client_id(client_id, query_client_id), limit)
+    ]
 
 
 @app.get("/api/backup/status")
@@ -1020,10 +1026,18 @@ def integrity_broken(client_id: str | None = Header(default=None, alias="X-Clien
 
 
 @app.get("/api/faces/{face_id}/thumbnail")
-def face_thumbnail(face_id: str, client_id: str | None = Header(default=None, alias="X-Client-ID")):
-    """Crop a single face from its original for the People grid."""
+def face_thumbnail(
+    face_id: str,
+    client_id: str | None = Header(default=None, alias="X-Client-ID"),
+    query_client_id: str | None = Query(default=None, alias="client_id"),
+):
+    """Crop a single face from its original for the People grid.
 
-    client_id = resolve_client_id(client_id)
+    Rendered straight into an <img>, so it must accept ?client_id= -- the
+    browser cannot attach a header to an image request.
+    """
+
+    client_id = resolve_client_id(client_id, query_client_id)
     from fastapi.responses import Response
 
     with db.closing(db.open_db()) as connection:
