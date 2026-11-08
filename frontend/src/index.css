@@ -1912,6 +1912,11 @@
 
 /* Utility action buttons. These sit in a card, not a modal, so they must be
    inline-width and must not inherit .modal-secondary's full-width/margin. */
+/* Keep action buttons in the same text column as the card's heading. */
+.utility-card .utility-actions {
+  padding-left: calc(38px + 14px);
+}
+
 .utility-actions .primary-button,
 .utility-actions .ghost-button {
   display: inline-flex;
@@ -1950,4 +1955,13 @@
 /* Keep the icon from crowding the label. */
 .utility-actions button svg {
   flex: 0 0 auto;
+}
+
+/* Align with the card's text column (icon width + head gap) so the status
+   line starts under the heading rather than under the icon. */
+.utility-backup-state {
+  margin: 10px 0 12px;
+  padding-left: calc(38px + 14px);
+  color: var(--on-surface-variant);
+  font-size: var(--text-sm);
 }

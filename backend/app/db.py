@@ -172,6 +172,13 @@ def init_db() -> None:
         )
         connection.executescript(
             """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                client_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (client_id, key)
+            );
             CREATE TABLE IF NOT EXISTS thumbnail_jobs (
                 id TEXT PRIMARY KEY,
                 media_id TEXT NOT NULL UNIQUE,
@@ -490,10 +497,12 @@ def update_media(
         connection.commit()
         if result.rowcount == 0:
             return None
-        return connection.execute(
+        row = connection.execute(
             "SELECT * FROM media_items WHERE id = ? AND client_id = ?",
             (media_id, client_id),
         ).fetchone()
+    mark_library_changed(client_id)
+    return row
 
 
 def delete_media(media_id: str, client_id: str) -> str | None:
@@ -506,7 +515,8 @@ def delete_media(media_id: str, client_id: str) -> str | None:
             return None
         connection.execute("DELETE FROM media_items WHERE id = ? AND client_id = ?", (media_id, client_id))
         connection.commit()
-        return str(row["local_path"])
+    mark_library_changed(client_id)
+    return str(row["local_path"])
 
 
 def list_albums(client_id: str) -> list[sqlite3.Row]:
@@ -530,8 +540,10 @@ def create_album(client_id: str, name: str, description: str = "") -> sqlite3.Ro
             "INSERT INTO albums (id, client_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
             (album_id, client_id, name.strip()[:200], description.strip()[:2000], now, now),
         )
+        row = connection.execute("SELECT *, 0 AS media_count FROM albums WHERE id = ?", (album_id,)).fetchone()
         connection.commit()
-        return connection.execute("SELECT *, 0 AS media_count FROM albums WHERE id = ?", (album_id,)).fetchone()
+    mark_library_changed(client_id)
+    return row
 
 
 def delete_album(album_id: str, client_id: str) -> bool:
@@ -557,7 +569,8 @@ def add_media_to_album(album_id: str, media_ids: list[str], client_id: str) -> i
                 (album_id, media_id, now),
             )
         connection.commit()
-        return len(valid_ids)
+    mark_library_changed(client_id)
+    return len(valid_ids)
 
 
 def list_tags(client_id: str) -> list[sqlite3.Row]:
@@ -576,8 +589,10 @@ def create_tag(client_id: str, name: str) -> sqlite3.Row:
             "INSERT INTO tags (id, client_id, name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(client_id, name) DO NOTHING",
             (tag_id, client_id, name.strip()[:100], now),
         )
+        row = connection.execute("SELECT tags.*, 0 AS media_count FROM tags WHERE client_id = ? AND name = ? COLLATE NOCASE", (client_id, name.strip()[:100])).fetchone()
         connection.commit()
-        return connection.execute("SELECT tags.*, 0 AS media_count FROM tags WHERE client_id = ? AND name = ? COLLATE NOCASE", (client_id, name.strip()[:100])).fetchone()
+    mark_library_changed(client_id)
+    return row
 
 
 def add_tag_to_media(tag_id: str, media_ids: list[str], client_id: str) -> int:
@@ -679,7 +694,13 @@ def mark_uploaded(media_id: str, telegram_message_id: int) -> None:
             "UPDATE upload_jobs SET status = 'uploaded', last_error = NULL, updated_at = ? WHERE media_id = ?",
             (now, media_id),
         )
+        owner = connection.execute(
+            "SELECT client_id FROM media_items WHERE id = ?", (media_id,)
+        ).fetchone()
         connection.commit()
+    # Metadata now differs from the last Telegram snapshot.
+    if owner:
+        mark_library_changed(owner["client_id"])
 
 
 def mark_failed(media_id: str, error: str) -> None:
@@ -1536,3 +1557,73 @@ def media_counts(client_id: str) -> dict[str, int]:
             "SELECT COUNT(*) AS n FROM tags WHERE client_id = ?", (client_id,)
         ).fetchone()
     return {"media": row["n"], "albums": albums["n"], "tags": tags["n"]}
+
+
+# ---------------------------------------------------------------------------
+# Auto-backup bookkeeping
+#
+# Metadata only drifts when something changes, so the trigger is "N changes
+# since the last backup" rather than "N uploads". That way a burst of uploads
+# refreshes the backup once at the end instead of once per file, which would
+# spam Saved Messages and waste Telegram rate limit.
+# ---------------------------------------------------------------------------
+
+AUTO_BACKUP_THRESHOLD = 25
+
+
+def get_media_any_client(media_id: str) -> sqlite3.Row | None:
+    """Look up a row without knowing its owner.
+
+    Used by background workers (upload, thumbnails, faces) which receive only
+    a media id and need the owning client to attribute their work.
+    """
+    with closing(open_db()) as connection:
+        return connection.execute(
+            "SELECT * FROM media_items WHERE id = ?", (media_id,)
+        ).fetchone()
+
+
+def get_setting(client_id: str, key: str) -> str | None:
+    with closing(open_db()) as connection:
+        row = connection.execute(
+            "SELECT value FROM app_settings WHERE client_id = ? AND key = ?",
+            (client_id, key),
+        ).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(client_id: str, key: str, value: str) -> None:
+    with closing(open_db()) as connection:
+        connection.execute(
+            """
+            INSERT INTO app_settings (client_id, key, value, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(client_id, key) DO UPDATE SET
+                value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (client_id, key, value, utc_now()),
+        )
+        connection.commit()
+
+
+def mark_library_changed(client_id: str) -> int:
+    """Count a change since the last backup. Returns the running total."""
+    current = int(get_setting(client_id, "changes_since_backup") or "0")
+    current += 1
+    set_setting(client_id, "changes_since_backup", str(current))
+    return current
+
+
+def clear_change_count(client_id: str) -> None:
+    set_setting(client_id, "changes_since_backup", "0")
+    set_setting(client_id, "last_backup_at", utc_now())
+
+
+def backup_state(client_id: str) -> dict[str, Any]:
+    pending = int(get_setting(client_id, "changes_since_backup") or "0")
+    return {
+        "changes_since_backup": pending,
+        "last_backup_at": get_setting(client_id, "last_backup_at"),
+        "threshold": AUTO_BACKUP_THRESHOLD,
+        "due": pending >= AUTO_BACKUP_THRESHOLD,
+    }

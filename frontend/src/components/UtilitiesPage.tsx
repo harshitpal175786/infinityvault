@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, CheckCircle2, CloudUpload, DatabaseBackup, HardDrive, RefreshCw, ShieldCheck } from 'lucide-react'
-import { applyRestore, backupMetadata, checkIntegrity, getIntegrityStatus, listBrokenMedia, scanForRestore } from '../api'
-import type { ApiMedia, IntegritySummary, RestoreScan } from '../api'
+import { applyRestore, backupMetadata, checkIntegrity, getBackupStatus, getIntegrityStatus, listBrokenMedia, scanForRestore } from '../api'
+import type { ApiMedia, BackupState, IntegritySummary, RestoreScan } from '../api'
 
 function formatChecked(value: string | null): string {
   if (!value) return 'Never checked'
@@ -28,12 +28,18 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
   const [running, setRunning] = useState(false)
   const [scan, setScan] = useState<RestoreScan | null>(null)
   const [busy, setBusy] = useState<'scan' | 'restore' | 'backup' | null>(null)
+  const [backupState, setBackupState] = useState<BackupState | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [nextSummary, nextBroken] = await Promise.all([getIntegrityStatus(), listBrokenMedia()])
+      const [nextSummary, nextBroken, nextBackup] = await Promise.all([
+        getIntegrityStatus(),
+        listBrokenMedia(),
+        getBackupStatus().catch(() => null),
+      ])
       setSummary(nextSummary)
       setBroken(nextBroken)
+      if (nextBackup) setBackupState(nextBackup)
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'Could not read library health.')
     }
@@ -67,6 +73,7 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
     setBusy('backup')
     try {
       const result = await backupMetadata()
+      setBackupState(await getBackupStatus().catch(() => backupState))
       onNotice(`Metadata backed up to Telegram: ${result.media} media, ${result.albums} albums, ${result.tags} tags.`)
     } catch (error) {
       onNotice(error instanceof Error ? error.message : 'The backup could not be uploaded.')
@@ -163,6 +170,17 @@ export function UtilitiesPage({ onNotice }: { onNotice: (message: string) => voi
             </p>
           </div>
         </div>
+        {backupState && (
+          <p className="utility-sub utility-backup-state">
+            {backupState.last_backup_at
+              ? `Last backed up ${new Date(backupState.last_backup_at).toLocaleString()}.`
+              : 'Never backed up — your albums and tags exist only on this machine.'}
+            {backupState.changes_since_backup > 0 &&
+              ` ${backupState.changes_since_backup} change${
+                backupState.changes_since_backup === 1 ? '' : 's'
+              } since then; it backs up automatically every ${backupState.threshold}.`}
+          </p>
+        )}
         <div className="utility-actions">
           <button type="button" className="primary-button" onClick={() => void runBackup()} disabled={busy !== null}>
             <DatabaseBackup size={14} />

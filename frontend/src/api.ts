@@ -258,3 +258,14 @@ export function applyRestore(): Promise<{
 }> {
   return request('/api/restore/apply', { method: 'POST' })
 }
+
+export interface BackupState {
+  changes_since_backup: number
+  last_backup_at: string | null
+  threshold: number
+  due: boolean
+}
+
+export function getBackupStatus(): Promise<BackupState> {
+  return request<BackupState>('/api/backup/status')
+}

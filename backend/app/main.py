@@ -672,6 +672,14 @@ async def integrity_check(
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
+@app.get("/api/backup/status")
+async def backup_status(
+    client_id: str = Header(default="local-user", alias="X-Client-ID"),
+) -> dict:
+    """How far the local index has drifted from the last Telegram snapshot."""
+    return db.backup_state(client_id)
+
+
 @app.post("/api/backup/metadata")
 async def backup_metadata(
     request: Request,

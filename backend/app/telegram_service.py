@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from telethon.sessions import StringSession
 
 from . import db
 from .db import utc_now
+
+logger = logging.getLogger(__name__)
 
 
 PHONE_PATTERN = re.compile(r"^\+[1-9]\d{6,14}$")
@@ -322,6 +325,7 @@ class TelegramService:
         finally:
             temp_path.unlink(missing_ok=True)
 
+        db.clear_change_count(client_id)
         return {
             "message_id": message.id,
             "filename": filename,
@@ -444,6 +448,34 @@ class TelegramService:
             "found": scan["media_found"],
         }
 
+    async def _maybe_auto_backup(self, media_id: str) -> None:
+        """Refresh the metadata snapshot once enough changes have piled up.
+
+        Throttled by change count, not by upload, so a bulk import refreshes
+        the backup once at the end instead of uploading a JSON file per photo
+        (which would waste Telegram's rate limit and bury the user's chat).
+
+        Failures are logged and swallowed: a backup problem must never make an
+        upload look like it failed.
+        """
+        media = db.get_media_any_client(media_id)
+        if not media:
+            return
+        client_id = media["client_id"]
+
+        state = db.backup_state(client_id)
+        if not state["due"]:
+            return
+
+        try:
+            result = await self.backup_metadata(client_id)
+            logger.info(
+                "Auto-backed up metadata after %s changes (%s media, %s albums, %s tags)",
+                state["changes_since_backup"], result["media"], result["albums"], result["tags"],
+            )
+        except Exception as exc:
+            logger.warning("Auto metadata backup failed: %s", exc)
+
     async def _upload_worker(self) -> None:
         while True:
             media_id = await self.upload_queue.get()
@@ -453,6 +485,7 @@ class TelegramService:
                 db.mark_failed(media_id, f"Upload failed: {exc}")
             finally:
                 self.upload_queue.task_done()
+                await self._maybe_auto_backup(media_id)
 
     async def _upload_media(self, media_id: str) -> None:
         media = db.get_media_by_id(media_id)

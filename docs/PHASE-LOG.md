@@ -21,6 +21,7 @@
 | 2.1 Thumbnails | ✅ | — | Grid never fetches originals |
 | 2.2 Integrity check | ✅ | — | Utilities page |
 | 2.3 Disaster recovery | ✅ | — | Backup + restore verified |
+| 2.4 Auto-backup | ✅ | — | Throttled by change count |
 | 3. Identity / auth | ⬜ Not started | — | Deploy gate |
 | 3.1 Token auth | ⬜ | — | |
 | 3.2 Single-user cleanup | ⬜ | — | |
@@ -225,6 +226,37 @@ _Log:_
 - **Honest limit, stated in the UI:** without a metadata backup, restore
   recovers photos only — albums, tags and favourites cannot be rebuilt from a
   caption.
+
+---
+
+## Phase 2.4 — Auto-backup
+
+- [x] `app_settings` table for durable bookkeeping
+- [x] `mark_library_changed()` on every metadata mutation
+- [x] `_maybe_auto_backup()` after each upload, throttled by change count
+- [x] `GET /api/backup/status` + drift line in Utilities
+- [x] Failure never breaks an upload; count stays high so it retries
+
+_Log:_
+- 2026-02-14 — A manual-only backup silently goes stale, which is the exact
+  failure Phase 2.3 exists to prevent. Throttled by **change count, not upload
+  count**: a bulk import of 500 photos must refresh the snapshot once at the
+  end, not upload 500 JSON files and bury the user's Saved Messages.
+- Verified: 7 uploads with threshold 5 produced **exactly 1** backup, fired at
+  the threshold and reset. Album/favourite edits also count; `create_media`
+  alone does not, since a row is only real metadata once uploaded.
+- Verified: with Telegram failing, uploads still succeed and the warning is
+  logged. The change count is not reset, so it retries rather than silently
+  losing the backup.
+- **Bug found in browser:** the status line never loaded, because the
+  `getBackupStatus()` call was never wired into `load()` — so the "never backed
+  up" warning would silently never appear. Fixed by folding it into the
+  existing `Promise.all`.
+- **Alignment fixed twice:** the status line and then the buttons sat under the
+  icon instead of the heading. Both now use the same
+  `calc(38px + 14px)` text-column inset; measured identical left edges (337px)
+  on all three cards. An earlier "misalignment" reading was a measurement
+  artifact — box edge vs painted text, confirmed with a `Range`.
 
 ---
 
