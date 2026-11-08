@@ -39,7 +39,7 @@ mobile app must respect them.
 | SQLite index, no Redis/BullMQ | No push notifications without new backend work |
 | Serial job workers | Mobile must not fire parallel uploads (web already caps at 2) |
 | 8 GB host machine | Thumbnail-first everywhere; never fetch originals for a grid |
-| `capture_time` (not `captured_at`) | Field naming follows the schema, not intuition |
+| DB column `capture_time`, wire field `captured_at` | Two different names for the same value. Verified: `PRAGMA table_info` says `capture_time`, the JSON says `captured_at`. Mobile reads the wire name. |
 
 ---
 
@@ -70,7 +70,7 @@ Confirmed against `backend/app/main.py`, not assumed.
 ### Writing
 
 - `POST /api/media` — upload (one file per request)
-- `PATCH /api/media/{id}` — favorite, archived, trashed, description, `captured_at`, folder
+- `PATCH /api/media/{id}` — favorite, archived, trashed, description, `captured_at`, folder path
 - `DELETE /api/media/{id}`
 - `POST /api/media/{id}/retry`
 - Albums: `POST`, `PATCH`, `DELETE`, `POST .../media`, `DELETE .../media`

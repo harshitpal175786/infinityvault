@@ -208,11 +208,51 @@ async function installFaceSupport() {
   console.log('The first scan downloads a ~160 MB model automatically.\n')
 }
 
-function startServices(configPath) {
+/**
+ * Resolve the interface the API listens on.
+ *
+ * Loopback is the safe default. Listening on the network is only allowed when an
+ * access token is configured, because an unsecured vault on a shared Wi-Fi is
+ * readable by anyone on it. The token is the whole authorisation model, so the
+ * two decisions are coupled rather than left to the caller to remember.
+ */
+async function resolveHost(configPath) {
+  const requested = (process.env.INFINITYVAULT_HOST || '').trim()
+  if (!requested) return { host: '127.0.0.1', reason: 'loopback (default)' }
+
+  if (requested === '127.0.0.1' || requested === 'localhost') {
+    return { host: '127.0.0.1', reason: 'loopback (requested)' }
+  }
+
+  let token = ''
+  try {
+    const contents = await readFile(configPath, 'utf8')
+    const match = contents.match(/^INFINITYVAULT_ACCESS_TOKEN=(.+)$/m)
+    token = match ? match[1].trim() : ''
+  } catch {
+    token = ''
+  }
+
+  if (!token) {
+    console.error('\nRefusing to listen on ' + requested + ' without an access token.')
+    console.error('That would expose your whole library to every device on this network.')
+    console.error('Run  npm run infinityvault -- token  first, or unset INFINITYVAULT_HOST.\n')
+    process.exit(1)
+  }
+
+  return { host: requested, reason: 'network, token required' }
+}
+
+async function startServices(configPath) {
   const children = []
+  const { host, reason } = await resolveHost(configPath)
+  if (host !== '127.0.0.1') {
+    console.log(`\nAPI listening on ${host} (${reason}).`)
+    console.log('Reach it from a phone at  http://<this-mac-ip>:8000\n')
+  }
   const backend = spawn(venvPython, [
     '-m', 'uvicorn', 'app.main:app',
-    '--host', '127.0.0.1',
+    '--host', host,
     '--port', '8000',
     '--env-file', configPath,
   ], { cwd: backendDir, stdio: 'inherit', env: process.env })
@@ -303,7 +343,7 @@ async function main() {
   }
 
   await prepareDependencies(skipInstall)
-  startServices(configPath)
+  await startServices(configPath)
 }
 
 main().catch((error) => {
