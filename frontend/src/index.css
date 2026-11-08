@@ -7,6 +7,19 @@
 /* --- Shell ---------------------------------------------------------------
    Grid: sidebar column + content column. Sidebar is sticky and scrolls
    independently so the timeline can scroll without moving navigation. */
+html {
+  /* The timeline runs to hundreds of tiles, so anchor jumps and back-navigation
+     glide instead of teleporting. Switched off below when the user has asked
+     for reduced motion. */
+  scroll-behavior: smooth;
+}
+
+/* Long libraries must stay responsive while the next page is arriving: without
+   this, scrolling past a page of still-decoding images jitters. */
+html,
+body {
+  overscroll-behavior-y: contain;
+}
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
@@ -1707,14 +1720,28 @@
   .theme-toggle-icon {
     animation: none;
   }
+
+  /* Smooth scrolling is animation, so it must obey the same preference. */
+  html {
+    scroll-behavior: auto;
+  }
 }
 
 /* Pagination footer. Sits after the last date group so it does not disturb
    the grid's auto-fill rhythm. */
 .load-more {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
   padding: 28px 0 40px;
+}
+
+.load-more-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--on-surface-variant);
+  text-align: center;
 }
 
 .load-more .ghost-button {

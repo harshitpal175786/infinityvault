@@ -46,6 +46,7 @@ import { ExplorePage } from './components/ExplorePage'
 import { Sidebar } from './components/Sidebar'
 import { EmptyState, MediaCard, MediaDetailsModal, MediaViewer, TelegramModal } from './components/MediaViews'
 import { useLibraryFilters, FILTERS, type Filter, type LibraryView } from './hooks/useLibraryFilters'
+import { useInfiniteScroll } from './hooks/useInfiniteScroll'
 import { dateKey, formatDateHeading, formatDuration, formatSize, formatTime, itemFromApi, statusLabel } from './lib/format'
 import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getAccessToken, getAuthStatus, getTelegramStatus, listAlbums, listCameras, listMedia, listMediaPage, listPeople, listTags, mediaUrl, retryMedia, setUnauthorizedHandler, startTelegramAuth, updateMedia, uploadMedia, verifyTelegramAuth } from './api'
 import type { Album, ApiMedia, CameraOption, MediaFilterParams, Tag, TelegramAuthResponse, TelegramStatus } from './api'
@@ -139,6 +140,15 @@ function App() {
       setLoadingMore(false)
     }
   }
+
+  // Fires as the end of the grid comes into view, so scrolling just keeps
+  // going instead of stopping at a button. The button stays below as a manual
+  // fallback and as a visible "there is more" cue.
+  const loadMoreSentinelRef = useInfiniteScroll({
+    onLoad: () => void loadMore(),
+    hasMore: Boolean(nextCursor),
+    loading: loadingMore,
+  })
 
   async function refreshLibrary(showError = true) {
     const seq = ++requestSeq.current
@@ -859,10 +869,13 @@ function App() {
               <EmptyState onUpload={() => fileInputRef.current?.click()} />
             )}
             {nextCursor && (
-              <div className="load-more">
+              <div className="load-more" ref={loadMoreSentinelRef}>
                 <button type="button" className="ghost-button" onClick={() => void loadMore()} disabled={loadingMore}>
-                  {loadingMore ? 'Loading…' : 'Load more'}
+                  {loadingMore ? 'Loading more…' : 'Load more'}
                 </button>
+                <p className="load-more-hint">
+                  {loadingMore ? 'Fetching the next page…' : 'Scroll down and more photos load on their own.'}
+                </p>
               </div>
             )}
           </div>
