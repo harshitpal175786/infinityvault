@@ -36,7 +36,7 @@ import { createMediaItem } from './media'
 import { useTheme } from './hooks/useTheme'
 import { usePolling } from './hooks/usePolling'
 import { ThemeToggle } from './components/ThemeToggle'
-import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getTelegramStatus, listAlbums, listMedia, listTags, mediaUrl, retryMedia, updateMedia, startTelegramAuth, uploadMedia, verifyTelegramAuth } from './api'
+import { addMediaToAlbum, addTagToMedia, createAlbum, createTag, deleteMedia, disconnectTelegram, getTelegramStatus, listAlbums, listMedia, listMediaPage, listTags, mediaUrl, retryMedia, updateMedia, startTelegramAuth, uploadMedia, verifyTelegramAuth } from './api'
 import type { Album, ApiMedia, Tag, TelegramAuthResponse, TelegramStatus } from './api'
 import type { MediaItem, MediaType, UploadStatus } from './types'
 
@@ -153,22 +153,54 @@ function App() {
     username: null,
   })
 
+  // Pagination. The first page is fetched on every refresh (cheap, keeps the
+  // newest photos live); later pages are appended only when the user asks.
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  // 1 = only the first page is loaded. Guards the cursor from being rewound by
+  // the 2s poll once the user has appended more.
+  const loadedPagesRef = useRef(1)
+
   // Guards against a slow response from an older view overwriting a newer one.
   const requestSeq = useRef(0)
+
+  // Appends the next page. Deliberately does NOT run through the refresh
+  // merge logic: that path reconciles local placeholders and would drop
+  // already-loaded pages.
+  async function loadMore() {
+    if (!nextCursor || loadingMore) return
+    const seq = requestSeq.current
+    setLoadingMore(true)
+    try {
+      const mediaView = libraryView === 'album' ? 'library' : libraryView
+      const page = await listMediaPage(mediaView, searchTerm, activeAlbumId, nextCursor)
+      // A view change mid-flight invalidates this page.
+      if (seq !== requestSeq.current) return
+      const known = new Set(items.map((item) => item.id))
+      const additions = page.items.map(itemFromApi).filter((item) => !known.has(item.id))
+      setItems((current) => [...current, ...additions])
+      setNextCursor(page.nextCursor)
+      loadedPagesRef.current += 1
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not load more photos.')
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   async function refreshLibrary(showError = true) {
     const seq = ++requestSeq.current
     try {
       const mediaView = libraryView === 'album' ? 'library' : libraryView
-      const [savedMedia, savedTelegramStatus, savedAlbums, savedTags] = await Promise.all([
-        listMedia(mediaView, searchTerm, activeAlbumId),
+      const [page, savedTelegramStatus, savedAlbums, savedTags] = await Promise.all([
+        listMediaPage(mediaView, searchTerm, activeAlbumId, null),
         getTelegramStatus(),
         listAlbums(),
         listTags(),
       ])
       if (seq !== requestSeq.current) return
 
-      const remote = savedMedia.map(itemFromApi)
+      const remote = page.items.map(itemFromApi)
       setItems((current) => {
         // A local item exists only in this tab until its upload finishes, and
         // it carries a temporary id (`name-size-timestamp-uuid`) that never
@@ -180,8 +212,25 @@ function App() {
           if (item.uploadStatus !== 'local' && item.uploadStatus !== 'queued') return false
           return !remoteKeys.has(`${item.name}|${item.size}`)
         })
-        return [...stillLocalOnly, ...remote]
+
+        // Preserve pages the user already loaded with "Load more". The poll
+        // runs every 2s and only fetches page 1, so replacing the list here
+        // would silently discard everything beyond the first page.
+        const firstPageIds = new Set(remote.map((item) => item.id))
+        const beyondFirstPage = current.filter(
+          (item) => item.uploadStatus !== 'local' && item.uploadStatus !== 'queued'
+            && !firstPageIds.has(item.id),
+        )
+
+        return [...stillLocalOnly, ...remote, ...beyondFirstPage]
       })
+
+      // Only advance the cursor when nothing extra is loaded; otherwise the
+      // stored cursor would skip past rows the user already appended.
+      // setState updaters must stay pure, so this lives outside setItems.
+      if (loadedPagesRef.current <= 1) {
+        setNextCursor(page.nextCursor)
+      }
       setTelegramStatus(savedTelegramStatus)
       setAlbums(savedAlbums)
       setTags(savedTags)
@@ -193,6 +242,8 @@ function App() {
   }
 
   useEffect(() => {
+    loadedPagesRef.current = 1
+    setNextCursor(null)
     void refreshLibrary()
     setSelectedIds(new Set())
   }, [libraryView, activeAlbumId])
@@ -208,6 +259,10 @@ function App() {
   }, [query])
 
   useEffect(() => {
+    // A new search is a new result set: drop back to a single page so the
+    // cursor and depth cannot leak across queries.
+    loadedPagesRef.current = 1
+    setNextCursor(null)
     void refreshLibrary(false)
   }, [searchTerm])
 
@@ -652,6 +707,13 @@ function App() {
             )) : (
               <EmptyState onUpload={() => fileInputRef.current?.click()} />
             )}
+            {nextCursor && (
+              <div className="load-more">
+                <button type="button" className="ghost-button" onClick={() => void loadMore()} disabled={loadingMore}>
+                  {loadingMore ? 'Loading…' : 'Load more'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </main>
@@ -678,7 +740,7 @@ function MediaCard({ item, selected, onSelect, onRetry, onConnect, onView, onFav
   const [previewFailed, setPreviewFailed] = useState(item.fileState === 'missing')
 
   return (
-    <article className={selected ? 'media-card selected' : 'media-card'}>
+    <article className={selected ? 'media-card selected' : 'media-card'} data-id={item.id}>
       <div
         className="media-preview"
         role="button"

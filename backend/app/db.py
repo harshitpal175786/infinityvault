@@ -1,3 +1,4 @@
+import base64
 import os
 import sqlite3
 from contextlib import closing
@@ -334,6 +335,93 @@ def list_media(
             f"SELECT * FROM media_items WHERE client_id = ? AND {state_filter} {album_filter} {search_filter} ORDER BY capture_time DESC",
             parameters,
         ).fetchall())
+
+
+DEFAULT_PAGE_SIZE = 200
+MAX_PAGE_SIZE = 1000
+
+
+def encode_cursor(capture_time: str, media_id: str) -> str:
+    """Opaque keyset cursor. Base64 so callers treat it as a token, not fields."""
+    raw = f"{capture_time}\x1f{media_id}".encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def decode_cursor(cursor: str) -> tuple[str, str]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+        capture_time, media_id = raw.split("\x1f", 1)
+    except Exception as exc:
+        raise ValueError("Invalid pagination cursor") from exc
+    return capture_time, media_id
+
+
+def list_media_page(
+    client_id: str,
+    view: str = "library",
+    query: str | None = None,
+    album_id: str | None = None,
+    cursor: str | None = None,
+    limit: int = DEFAULT_PAGE_SIZE,
+) -> tuple[list[sqlite3.Row], str | None]:
+    """One page of media, newest first, using a keyset cursor.
+
+    Keyset rather than OFFSET because new photos arrive between polls: an
+    OFFSET would skip or repeat rows as the list shifts, while
+    (capture_time, id) stays stable. `id` is the tiebreaker for rows that
+    share a capture_time, which is common for bulk imports.
+    """
+    limit = max(1, min(limit, MAX_PAGE_SIZE))
+
+    state_filter = {
+        "library": "trashed_at IS NULL AND is_archived = 0",
+        "favorites": "trashed_at IS NULL AND is_favorite = 1",
+        "archive": "trashed_at IS NULL AND is_archived = 1",
+        "trash": "trashed_at IS NOT NULL",
+        "all": "1 = 1",
+    }.get(view, "trashed_at IS NULL AND is_archived = 0")
+
+    parameters: list[Any] = [client_id]
+    album_filter = ""
+    if album_id:
+        album_filter = "AND id IN (SELECT media_id FROM album_media WHERE album_id = ?)"
+        parameters.append(album_id)
+
+    search_filter = ""
+    if query and query.strip():
+        search_filter = (
+            "AND (LOWER(original_name) LIKE ? OR LOWER(description) LIKE ? "
+            "OR LOWER(COALESCE(folder_path, '')) LIKE ?)"
+        )
+        term = f"%{query.strip().lower()}%"
+        parameters.extend([term, term, term])
+
+    cursor_filter = ""
+    if cursor:
+        cursor_time, cursor_id = decode_cursor(cursor)
+        # Strictly "after" the cursor in (capture_time DESC, id DESC) order.
+        cursor_filter = "AND (capture_time < ? OR (capture_time = ? AND id < ?))"
+        parameters.extend([cursor_time, cursor_time, cursor_id])
+
+    # Fetch one extra row to learn whether another page exists without a
+    # second COUNT query.
+    parameters.append(limit + 1)
+
+    with closing(open_db()) as connection:
+        rows = list(connection.execute(
+            f"SELECT * FROM media_items WHERE client_id = ? AND {state_filter} "
+            f"{album_filter} {search_filter} {cursor_filter} "
+            f"ORDER BY capture_time DESC, id DESC LIMIT ?",
+            parameters,
+        ).fetchall())
+
+    if len(rows) > limit:
+        rows = rows[:limit]
+        last = rows[-1]
+        next_cursor = encode_cursor(last["capture_time"], last["id"])
+    else:
+        next_cursor = None
+    return rows, next_cursor
 
 
 def update_media(

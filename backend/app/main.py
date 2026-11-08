@@ -3,6 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
@@ -53,7 +54,14 @@ app = FastAPI(title="InfinityVault API", version="0.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    # Ports 5173 (dev) plus any extra origin from the env file, so a proxy or
+    # an alternate dev port works without editing code.
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5180",
+        "http://127.0.0.1:5180",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -177,9 +185,33 @@ def get_media(
     view: str = Query(default="library"),
     search: str | None = Query(default=None),
     album_id: str | None = Query(default=None),
+    cursor: str | None = Query(default=None),
+    limit: int | None = Query(default=None),
     client_id: str = Header(default="local-user", alias="X-Client-ID"),
-) -> list[dict]:
-    return [db.row_to_media(row) for row in db.list_media(client_id, view=view, query=search, album_id=album_id)]
+) -> Any:
+    """List media, newest first.
+
+    Pagination is opt-in so an existing client that sends no `cursor`/`limit`
+    still receives a plain array. Passing either switches the response to
+    `{items, next_cursor}`, so the two shapes never mix.
+    """
+    if cursor is None and limit is None:
+        rows = db.list_media(client_id, view=view, query=search, album_id=album_id)
+        return [db.row_to_media(row) for row in rows]
+
+    try:
+        rows, next_cursor = db.list_media_page(
+            client_id,
+            view=view,
+            query=search,
+            album_id=album_id,
+            cursor=cursor,
+            limit=limit or db.DEFAULT_PAGE_SIZE,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return {"items": [db.row_to_media(row) for row in rows], "next_cursor": next_cursor}
 
 
 @app.post("/api/media")

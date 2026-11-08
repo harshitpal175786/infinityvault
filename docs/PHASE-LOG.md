@@ -6,7 +6,7 @@
 
 **Plan:** `docs/PRD-PHASES.md`
 **Baseline commit:** `d68fac7`
-**Current phase:** Phase 1 — 1.1 complete, 1.2 next
+**Current phase:** Phase 2 next — Phase 1 complete
 
 ---
 
@@ -14,9 +14,9 @@
 
 | Phase | Status | Owner | Notes |
 | --- | --- | --- | --- |
-| 1. Trust the library | 🟡 In progress | — | Paths done, pagination next |
+| 1. Trust the library | ✅ Done | — | 1.1 + 1.2 verified |
 | 1.1 `local_path` reconciliation | ✅ | — | Verified on real DB |
-| 1.2 Pagination | ⬜ | — | |
+| 1.2 Pagination | ✅ | — | Verified in browser |
 | 2. Telegram cold store | ⬜ Not started | — | |
 | 2.1 Thumbnails | ⬜ | — | |
 | 2.2 Integrity check | ⬜ | — | |
@@ -91,12 +91,35 @@ _Log:_
 
 ### 1.2 Pagination
 
-- [ ] `GET /api/media?cursor=&limit=` returns `{items, next_cursor}`
-- [ ] Cursor is `(capture_time, id)`
-- [ ] Frontend appends instead of replacing
-- [ ] Verified with a synthetic large library
+- [x] `GET /api/media?cursor=&limit=` returns `{items, next_cursor}`
+- [x] Cursor is `(capture_time, id)`, base64-opaque
+- [x] Backward compatible: no `cursor`/`limit` still returns a plain array
+- [x] Cursor is stable through concurrent inserts (keyset, not OFFSET)
+- [x] Frontend appends instead of replacing; "Load more" footer
+- [x] Verified with a synthetic 520-row library and in Chromium
 
-_Log:_ (empty)
+_Log:_
+- 2026-02-14 — Implemented keyset pagination. `limit` clamps to 1..1000,
+  default 200. One extra row is fetched per page to decide `next_cursor`
+  without a second COUNT query.
+- Verified 500 rows / 5 pages / 0 duplicates, with 50 rows deliberately
+  sharing one `capture_time` to exercise the `id` tiebreaker.
+- Verified stability: inserting 20 newer rows mid-walk produced no
+  duplicates and no skips (the reason OFFSET was rejected).
+- HTTP verified: legacy array shape preserved; paginated shape correct;
+  garbage cursor → 400; oversized limit clamped.
+- Browser verified (Chromium, 520-row library): 8/8 checks — first request
+  carries `limit=`, no cursor; 200 tiles; Load more → 400 tiles; all 400
+  unique; view switch restarts at page 1.
+- **Bug found by the browser test:** the 2s poll called `refreshLibrary`,
+  which replaced `items` with page 1 and silently discarded every appended
+  page. Fixed by preserving rows beyond page 1 and guarding cursor rewinding
+  with `loadedPagesRef`. Re-verified: 400 tiles after ~4 poll cycles.
+- **Bug found:** `setNextCursor` was briefly placed inside a `setItems`
+  updater; moved out to keep updaters pure.
+- Added `data-id` to `MediaCard` (needed for the duplicate assertion).
+- CORS: widened to include port 5180 so an alternate dev port works; this
+  also blocked the first browser run ("Failed to fetch").
 
 ---
 

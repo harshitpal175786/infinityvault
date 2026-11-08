@@ -1708,3 +1708,20 @@
     animation: none;
   }
 }
+
+/* Pagination footer. Sits after the last date group so it does not disturb
+   the grid's auto-fill rhythm. */
+.load-more {
+  display: flex;
+  justify-content: center;
+  padding: 28px 0 40px;
+}
+
+.load-more .ghost-button {
+  min-width: 160px;
+}
+
+.load-more .ghost-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

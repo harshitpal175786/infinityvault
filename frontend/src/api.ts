@@ -115,6 +115,29 @@ export function disconnectTelegram(): Promise<{ connected: false }> {
   return request<{ connected: false }>('/api/telegram/disconnect', { method: 'POST' })
 }
 
+export interface MediaPage {
+  items: ApiMedia[]
+  nextCursor: string | null
+}
+
+/** One page of media. Cursors are opaque; pass `nextCursor` to continue. */
+export async function listMediaPage(
+  view = 'library',
+  search = '',
+  albumId?: string,
+  cursor?: string | null,
+  limit = 200,
+): Promise<MediaPage> {
+  const params = new URLSearchParams({ view, limit: String(limit) })
+  if (search.trim()) params.set('search', search.trim())
+  if (albumId) params.set('album_id', albumId)
+  if (cursor) params.set('cursor', cursor)
+  const page = await request<{ items: ApiMedia[]; next_cursor: string | null }>(
+    `/api/media?${params.toString()}`,
+  )
+  return { items: page.items, nextCursor: page.next_cursor }
+}
+
 export async function listMedia(view = 'library', search = '', albumId?: string): Promise<ApiMedia[]> {
   const params = new URLSearchParams({ view })
   if (search.trim()) params.set('search', search.trim())
