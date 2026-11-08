@@ -20,3 +20,6 @@ backend/data/
 frontend/vite.config.js
 frontend/vite.config.d.ts
 .shots/
+
+# Scratch Playwright scripts, never part of the app
+*.tmp.mjs
