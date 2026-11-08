@@ -498,8 +498,12 @@ class TelegramService:
             db.mark_waiting_for_telegram(media_id)
             return
 
-        local_path = Path(media["local_path"])
-        if not local_path.exists():
+        # Relative paths (uploads/<uuid>.jpg) are stored deliberately so the
+        # data directory can move. Path() alone resolves them against the
+        # process CWD, which is backend/, so every upload failed here with
+        # "local file is no longer available" even though the file was present.
+        local_path = db.resolve_local_path(media["local_path"])
+        if not local_path.is_file():
             db.mark_failed(media_id, "The local upload file is no longer available.")
             return
 

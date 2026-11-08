@@ -596,20 +596,25 @@ async def upload_media(
         pass
 
     await telegram_service(request).enqueue(media_id)
+
+    # The media type lives on the row, not in this scope: retry has no upload
+    # form to read it from. Reading it here is why this route used to raise
+    # NameError *after* the upload had already been queued, so the retry looked
+    # like a 500 while quietly succeeding.
+    row = db.get_media(media_id, client_id)
+    media_type = row["media_type"] if row else None
     if media_type == "photo":
-        # Faces are optional and never block the upload response.
         try:
             db.enqueue_face_job(media_id, client_id)
         except Exception:
             pass
-    else:
+    elif media_type == "video":
         # A proxy is what makes playback start in a second rather than after a
         # full Telegram download, so queue it the moment a video arrives.
         try:
             db.enqueue_proxy_job(media_id)
         except Exception:
             pass
-    row = db.get_media(media_id, client_id)
     return db.row_to_media(row)
 
 
@@ -968,20 +973,25 @@ async def retry_media(
         pass
 
     await telegram_service(request).enqueue(media_id)
+
+    # The media type lives on the row, not in this scope: retry has no upload
+    # form to read it from. Reading it here is why this route used to raise
+    # NameError *after* the upload had already been queued, so the retry looked
+    # like a 500 while quietly succeeding.
+    row = db.get_media(media_id, client_id)
+    media_type = row["media_type"] if row else None
     if media_type == "photo":
-        # Faces are optional and never block the upload response.
         try:
             db.enqueue_face_job(media_id, client_id)
         except Exception:
             pass
-    else:
+    elif media_type == "video":
         # A proxy is what makes playback start in a second rather than after a
         # full Telegram download, so queue it the moment a video arrives.
         try:
             db.enqueue_proxy_job(media_id)
         except Exception:
             pass
-    row = db.get_media(media_id, client_id)
     return db.row_to_media(row)
 
 
