@@ -1564,16 +1564,41 @@ def enqueue_all_thumbnails(client_id: str) -> int:
 
 
 def next_thumbnail_job() -> sqlite3.Row | None:
+    """Claim the oldest queued job, atomically.
+
+    The claim and the status change happen in one UPDATE ... RETURNING, not a
+    SELECT followed by a separate mark. With a single worker that distinction
+    did not matter; with several workers running concurrently, a plain SELECT
+    lets two of them pick up the same job and generate the same thumbnail twice.
+    """
     with closing(open_db()) as connection:
+        row = connection.execute(
+            """
+            UPDATE thumbnail_jobs
+            SET status = 'running', attempts = attempts + 1, updated_at = ?
+            WHERE media_id = (
+                SELECT media_id FROM thumbnail_jobs
+                WHERE status = 'queued'
+                ORDER BY created_at
+                LIMIT 1
+            )
+            RETURNING media_id
+            """,
+            (utc_now(),),
+        ).fetchone()
+        claimed = row
+        if claimed is None:
+            return None
+        # The worker needs the media item's own columns, not just the id, so
+        # read them after the claim rather than widening the RETURNING clause.
         return connection.execute(
             """
             SELECT thumbnail_jobs.media_id, media_items.local_path, media_items.media_type
             FROM thumbnail_jobs
             JOIN media_items ON media_items.id = thumbnail_jobs.media_id
-            WHERE thumbnail_jobs.status = 'queued'
-            ORDER BY thumbnail_jobs.created_at
-            LIMIT 1
-            """
+            WHERE thumbnail_jobs.media_id = ?
+            """,
+            (claimed["media_id"],),
         ).fetchone()
 
 

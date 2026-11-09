@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -58,7 +59,20 @@ def _find_ffmpeg() -> str | None:
 
 class ThumbnailService:
     def __init__(self) -> None:
-        self.worker_task: asyncio.Task[None] | None = None
+        # Several workers, because the cost of a thumbnail is almost entirely
+        # the network round-trip to Telegram, not CPU. One worker left 559 items
+        # queued behind a single download at a time.
+        #
+        # Bounded, not unbounded: this is an 8 GB machine, and each in-flight
+        # video may be decoded. Default 4 is a deliberate compromise between
+        # throughput and memory. Set INFINITYVAULT_THUMB_WORKERS=1 to restore
+        # the old serial behaviour.
+        try:
+            workers = int(os.getenv("INFINITYVAULT_THUMB_WORKERS", "4"))
+        except ValueError:
+            workers = 4
+        self._workers = max(1, min(workers, 8))
+        self.worker_tasks: list[asyncio.Task[None]] = []
         self._running = False
         self._executor: ThreadPoolExecutor | None = None
 
@@ -158,7 +172,7 @@ class ThumbnailService:
         if not PIL_AVAILABLE:
             raise RuntimeError("Pillow is not installed; thumbnails are disabled.")
         if self._executor is None:
-            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="thumbs")
+            self._executor = ThreadPoolExecutor(max_workers=self._workers, thread_name_prefix="thumbs")
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self._executor, self._generate_sync, media_id, local_path, media_type)
 
@@ -166,13 +180,13 @@ class ThumbnailService:
     async def start(self) -> None:
         db.reset_interrupted_thumbnail_jobs()
         self._running = True
-        self.worker_task = asyncio.create_task(self._worker())
+        self.worker_tasks = [asyncio.create_task(self._worker()) for _ in range(self._workers)]
 
     async def stop(self) -> None:
         self._running = False
-        if self.worker_task:
-            self.worker_task.cancel()
-            await asyncio.gather(self.worker_task, return_exceptions=True)
+        for task in self.worker_tasks:
+            task.cancel()
+        await asyncio.gather(*self.worker_tasks, return_exceptions=True)
         if self._executor:
             self._executor.shutdown(wait=False)
             self._executor = None
@@ -185,8 +199,9 @@ class ThumbnailService:
                     await asyncio.sleep(3)
                     continue
 
+                # Already marked running by the atomic claim in
+                # next_thumbnail_job; marking again would double-count attempts.
                 media_id = job["media_id"]
-                await asyncio.to_thread(db.mark_thumbnail_running, media_id)
                 try:
                     await self.generate(media_id, job["local_path"], job["media_type"])
                 except ThumbnailTooLargeToFetch as exc:
