@@ -1,0 +1,1318 @@
+/* ==========================================================================
+   Phase 1 — Design system primitives
+   Buttons, tooltips, modals, toasts, spinners, skeletons, dropdowns and the
+   global focus ring. Built on the existing tokens only: no literal colours,
+   no new dependencies, all three breakpoints respected.
+   ========================================================================== */
+
+/* --- Global focus ring ---------------------------------------------------
+   One ring for the whole app. Before this, only three selectors had a
+   focus-visible style across 2,768 lines of CSS, so keyboard users could not
+   reliably tell where they were. Colour comes from the token layer, and the
+   offset keeps the ring clear of the element's own border. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Hide the ring for pointer users without disabling it for keyboards. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* --- Button -------------------------------------------------------------
+   One primitive with variants. The older .ghost-button and .primary-button
+   classes stay so existing screens keep their exact appearance; both are now
+   expressed in terms of the same tokens. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-body);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* Primary: the single most important action on a screen. */
+.btn--primary {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+/* Secondary: default. Neutral surface, visible border. */
+.btn--secondary {
+  background: var(--surface);
+  color: var(--on-surface);
+  border-color: var(--outline);
+}
+
+.btn--secondary:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--outline-strong);
+}
+
+/* Ghost: low emphasis, used in toolbars and rows. */
+.btn--ghost {
+  background: transparent;
+  color: var(--on-surface-variant);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--on-surface);
+}
+
+.btn--danger {
+  background: var(--danger-container);
+  color: var(--danger);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--on-primary);
+}
+
+.btn--sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--text-xs);
+  gap: 5px;
+}
+
+.btn--lg {
+  height: 40px;
+  padding: 0 18px;
+  font-size: var(--text-md);
+}
+
+.btn--block {
+  width: 100%;
+}
+
+/* Icon-only: square, no label. Always needs an accessible name. */
+.btn--icon {
+  width: 34px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.btn--icon.btn--sm {
+  width: 28px;
+  padding: 0;
+}
+
+@media (max-width: 767px) {
+  /* Touch targets must stay reachable on a phone. */
+  .btn {
+    height: 38px;
+  }
+
+  .btn--icon {
+    width: 38px;
+  }
+}
+
+/* --- Spinner ------------------------------------------------------------
+   Uses currentColor so it works on any surface without a variant class. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spinner-rotate 640ms linear infinite;
+  flex-shrink: 0;
+}
+
+.spinner--lg {
+  width: 22px;
+  height: 22px;
+  border-width: 3px;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* A spinner is the one place motion is informative, so slow it rather than
+     freezing it: a static spinner looks like a dead control. */
+  .spinner {
+    animation-duration: 1800ms;
+  }
+}
+
+/* --- Skeleton -----------------------------------------------------------
+   Placeholder for content that has a known shape but unknown data. */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface-3) 37%,
+    var(--surface-2) 63%
+  );
+  background-size: 400% 100%;
+  border-radius: var(--radius-sm);
+  animation: skeleton-sweep 1400ms ease-in-out infinite;
+}
+
+.skeleton--text {
+  height: 10px;
+  border-radius: var(--radius-pill);
+}
+
+.skeleton--tile {
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+}
+
+@keyframes skeleton-sweep {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background: var(--surface-2);
+  }
+}
+
+/* --- Tooltip ------------------------------------------------------------
+   Hover and focus both reveal it, so keyboard users get the same labels as
+   pointer users. The bubble is rendered by React into a portal, so it is never
+   clipped by an ancestor's overflow. */
+.tooltip {
+  position: fixed;
+  z-index: var(--z-toast);
+  max-width: 240px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--on-surface);
+  color: var(--surface);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.35;
+  pointer-events: none;
+  box-shadow: var(--shadow-2);
+  animation: tooltip-in var(--dur-fast) var(--ease);
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip {
+    animation: none;
+  }
+}
+
+/* --- Dropdown / menu ---------------------------------------------------- */
+.menu {
+  position: fixed;
+  z-index: var(--z-modal);
+  min-width: 190px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  animation: menu-in var(--dur-fast) var(--ease);
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu {
+    animation: none;
+  }
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--on-surface);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.menu-item--danger {
+  color: var(--danger);
+}
+
+.menu-item--danger:hover:not(:disabled) {
+  background: var(--danger-container);
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--outline);
+  border: 0;
+}
+
+.menu-label {
+  padding: 6px 9px 4px;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--on-surface-variant);
+}
+
+/* --- Modal / dialog ----------------------------------------------------
+   Shared shell so the two existing bespoke modals can adopt it without
+   changing how they look. */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: var(--scrim);
+  animation: scrim-in var(--dur) var(--ease);
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.modal-panel {
+  width: min(100%, 480px);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 22px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  animation: panel-in var(--dur) var(--ease);
+}
+
+.modal-panel--wide {
+  width: min(100%, 620px);
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-scrim,
+  .modal-panel {
+    animation: none;
+  }
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--on-surface);
+}
+
+.modal-body {
+  color: var(--on-surface-variant);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+@media (max-width: 767px) {
+  .modal-scrim {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal-panel {
+    width: 100%;
+    max-height: 88vh;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    animation: sheet-in var(--dur) var(--ease);
+  }
+
+  @keyframes sheet-in {
+    from {
+      transform: translateY(100%);
+    }
+  }
+}
+
+/* --- Toast -------------------------------------------------------------
+   Stacked in the top-right. Each toast is announced by role=status so screen
+   readers read errors without the user finding them. */
+.toast-stack {
+  position: fixed;
+  /* Below the topbar rather than over it: at top:14px the stack covered the
+     search field and the add button, so a toast hid the very controls the user
+     was about to reach for. */
+  top: calc(var(--topbar-h) + 10px);
+  right: 14px;
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100vw - 28px));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--outline);
+  border-left: 3px solid var(--on-surface-variant);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--on-surface);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  box-shadow: var(--shadow-3);
+  pointer-events: auto;
+  animation: toast-in var(--dur) var(--ease);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+.toast--success {
+  border-left-color: var(--success);
+}
+
+.toast--error {
+  border-left-color: var(--danger);
+}
+
+.toast--info {
+  border-left-color: var(--primary);
+}
+
+.toast-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.toast--success .toast-icon {
+  color: var(--success);
+}
+
+.toast--error .toast-icon {
+  color: var(--danger);
+}
+
+.toast--info .toast-icon {
+  color: var(--primary);
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  background: var(--surface-2);
+  color: var(--on-surface);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .toast-stack {
+    top: calc(var(--topbar-h) + 6px);
+    right: 8px;
+    left: 8px;
+    width: auto;
+  }
+}
+
+/* --- Visually hidden ---------------------------------------------------
+   For accessible names on icon-only controls. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --- Skeleton grid + load error -----------------------------------------
+   The skeleton uses the real grid's sizing variables so the swap to content
+   causes no layout shift. */
+.skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile-target), 1fr));
+  gap: var(--gap-media);
+}
+
+.grid-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 56px 20px;
+  text-align: center;
+  color: var(--on-surface-variant);
+}
+
+.grid-error svg {
+  color: var(--danger);
+}
+
+.grid-error h3 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--on-surface);
+}
+
+.grid-error p {
+  margin: 0;
+  max-width: 42ch;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.grid-error .btn {
+  margin-top: 6px;
+}
+
+/* --- Phase 3: viewer zoom, fullscreen and metadata ---------------------- */
+
+/* The header sits above the body; the body is a horizontal split so the info
+   panel takes width from the stage without shrinking the header's buttons. */
+.viewer-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.viewer-stage.zoomed {
+  cursor: grab;
+  /* Wheel zoom replaces scrolling on the stage itself. */
+  overscroll-behavior: contain;
+}
+
+.viewer-stage.zoomed:active {
+  cursor: grabbing;
+}
+
+.viewer-stage.zoomed img {
+  transition: transform var(--motion-fast) ease-out;
+  will-change: transform;
+  user-select: none;
+  /* Panning past the edge must not select text or start a native image drag. */
+  -webkit-user-drag: none;
+}
+
+.viewer-zoom-label {
+  min-width: 4ch;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--on-viewer-muted);
+}
+
+.viewer-info {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 300px;
+  flex-shrink: 0;
+  padding: 16px;
+  overflow-y: auto;
+  border-left: 1px solid var(--viewer-divider);
+  color: var(--on-viewer);
+}
+
+.viewer-info-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.viewer-info-head h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.viewer-info-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.viewer-info .icon-button {
+  color: var(--on-viewer-muted);
+}
+
+.viewer-info .icon-button:hover {
+  color: var(--on-viewer);
+}
+
+.viewer-info .icon-button.is-active {
+  color: var(--warning);
+}
+
+.viewer-info-desc {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--on-viewer-muted);
+}
+
+.viewer-info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0;
+}
+
+.viewer-info-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--text-xs);
+}
+
+.viewer-info-row dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--on-viewer-subtle);
+}
+
+.viewer-info-row dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.viewer-info-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.viewer-info-tags-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--on-viewer-subtle);
+}
+
+.viewer-info-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.viewer-info-source {
+  margin: auto 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--on-viewer-faint);
+}
+
+/* Metadata becomes a bottom sheet on phones, where a 300px side column would
+   leave no room for the photo. */
+@media (max-width: 767px) {
+  .viewer-body.with-info {
+    flex-direction: column;
+  }
+
+  .viewer-info {
+    width: 100%;
+    max-height: 46vh;
+    border-left: 0;
+    border-top: 1px solid var(--viewer-divider);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewer-stage.zoomed img {
+    transition: none;
+  }
+}
+
+/* --- Text input ---------------------------------------------------------
+   A generic field. Several screens each grew their own one-off input class;
+   this is the shared one new work should use. */
+.text-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--outline-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--on-surface);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  transition: border-color var(--motion-fast) ease-out;
+}
+
+.text-input::placeholder {
+  color: var(--on-surface-variant);
+}
+
+.text-input:hover {
+  border-color: var(--on-surface-variant);
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-container);
+}
+
+/* --- Albums ------------------------------------------------------------- */
+.albums-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.albums-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.albums-head h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.albums-head p {
+  margin: 2px 0 0;
+  font-size: var(--text-sm);
+  color: var(--on-surface-variant);
+}
+
+.album-create {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-md);
+  background: var(--surface-container);
+}
+
+.album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.album-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.album-cover {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-md);
+  background: var(--surface-container);
+  cursor: pointer;
+  transition: transform var(--motion-fast) ease-out, box-shadow var(--motion-fast) ease-out;
+}
+
+.album-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.album-cover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2);
+}
+
+.album-cover-empty {
+  color: var(--on-surface-variant);
+}
+
+.album-count {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  /* Sits on top of a photo, so it uses the fixed viewer ramp rather than the
+     theme surface, which would be unreadable over a bright cover. */
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--on-viewer);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.album-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.album-name {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--on-surface);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.album-name:hover {
+  color: var(--primary);
+}
+
+.album-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.album-menu {
+  left: auto;
+  right: 0;
+  top: calc(100% + 4px);
+}
+
+.albums-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 52px 20px;
+  text-align: center;
+  color: var(--on-surface-variant);
+}
+
+.albums-empty h3 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--on-surface);
+}
+
+.albums-empty p {
+  margin: 0;
+  max-width: 40ch;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+@media (max-width: 767px) {
+  .albums-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .album-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+  }
+}
+
+/* --- Person card actions (hide / remove) -------------------------------- */
+.person-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.person-actions .icon-button {
+  padding: 3px;
+  color: var(--on-surface-variant);
+}
+
+.person-actions .icon-button:hover {
+  color: var(--on-surface);
+}
+
+.person-actions .delete-person:hover {
+  color: var(--danger);
+}
+
+.person-actions .person-merge {
+  margin-right: 2px;
+}
+
+/* The card is a column, so the action row needs its own track beneath the
+   name rather than trying to fit beside it. */
+.person-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 11px 9px;
+}
+
+.person-actions-row .person-merge {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+/* --- Search: recent queries ---------------------------------------------- */
+.search-field {
+  position: relative;
+}
+
+.search-clear {
+  display: grid;
+  place-items: center;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+}
+
+.search-clear:hover {
+  color: var(--on-surface);
+}
+
+.search-recent {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: var(--z-drawer);
+  padding: 5px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+
+.search-recent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 7px 6px;
+  font-size: var(--text-xs);
+  color: var(--on-surface-variant);
+}
+
+.search-recent-head button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--on-surface-variant);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.search-recent-head button:hover {
+  color: var(--primary);
+}
+
+.search-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--on-surface);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-recent-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-recent-item svg {
+  flex-shrink: 0;
+  color: var(--on-surface-variant);
+}
+
+.search-recent-item:hover,
+.search-recent-item:focus-visible {
+  background: var(--surface-container);
+}
+
+/* --- Upload progress on a tile ------------------------------------------ */
+.tile-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.tile-progress span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  transition: width var(--motion-fast) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile-progress span {
+    transition: none;
+  }
+}
+
+/* --- Upload queue summary ----------------------------------------------- */
+.upload-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-md);
+  background: var(--surface-container);
+  font-size: var(--text-sm);
+  color: var(--on-surface-variant);
+}
+
+.upload-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.upload-summary-failed {
+  color: var(--danger);
+}
+
+.upload-summary-failed button {
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font-family: inherit;
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* --- Settings ------------------------------------------------------------ */
+.settings-page {
+  max-width: 780px;
+  padding: 4px 0 48px;
+}
+
+.settings-loading {
+  display: grid;
+  place-items: center;
+  padding: 64px 0;
+}
+
+.settings-section {
+  margin-bottom: 28px;
+  padding: 18px 20px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.settings-section h2 {
+  margin: 0 0 4px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.settings-hint {
+  margin: 0 0 14px;
+  font-size: var(--text-sm);
+  color: var(--on-surface-variant);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--outline-variant);
+}
+
+.settings-row:first-of-type {
+  border-top: 0;
+}
+
+.settings-row-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-container);
+  color: var(--on-surface-variant);
+}
+
+.settings-row-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-row-body strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.settings-row-body span {
+  font-size: var(--text-sm);
+  color: var(--on-surface-variant);
+}
+
+.settings-row .ghost-button {
+  flex-shrink: 0;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.segmented-item {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: none;
+  color: var(--on-surface-variant);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-transform: capitalize;
+  cursor: pointer;
+}
+
+.segmented-item.active {
+  /* Primary, not surface-on-surface-2: the surface delta is nearly invisible in
+     dark mode, which made the selected theme unclear. */
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+@media (max-width: 767px) {
+  .settings-row {
+    flex-wrap: wrap;
+  }
+
+  .settings-row-body {
+    flex-basis: calc(100% - 44px);
+  }
+}
+
+/* --- Crash fallback ------------------------------------------------------ */
+.crash-screen {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: var(--surface-2);
+}
+
+.crash-card {
+  width: min(520px, 100%);
+  padding: 28px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  text-align: center;
+  box-shadow: var(--shadow-2);
+}
+
+.crash-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  background: var(--surface-container);
+  color: var(--danger);
+}
+
+.crash-card h1 {
+  margin: 0 0 8px;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.crash-card p {
+  margin: 0 0 16px;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--on-surface-variant);
+}
+
+.crash-detail {
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-container);
+  color: var(--on-surface-variant);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.crash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}

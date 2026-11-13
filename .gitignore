@@ -10,6 +10,16 @@ __pycache__/
 *.session
 *.session-journal
 backend/data/
+# Belt and braces: the live library database holds your photo metadata and must
+# never be committed, even if someone relocates it out of backend/data/.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
 *.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+.shots/
+
+# Scratch Playwright scripts, never part of the app
+*.tmp.mjs

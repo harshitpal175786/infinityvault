@@ -1,0 +1,224 @@
+"""Thumbnail generation.
+
+The grid used to download full-size originals to paint 180px tiles, which made
+a dense library unusable. This service derives two small WebP files per asset,
+once, and the UI then never touches the original for browsing.
+
+Two sizes because they serve different jobs:
+
+* ``_thumb.webp`` (400px longest edge) — the actual grid/viewer image.
+  Full-width CSS pixels at 2x DPR is at most ~400px for a tile this size, so
+  anything larger is wasted bytes.
+* ``_micro.webp`` (32px, blurred) — inlined as a blur-up placeholder so tiles
+  never flash empty while the real thumbnail decodes.
+
+All work happens in a serial background worker, matching the upload and face
+queues. Generation is never done in a request path.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import shutil
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+from . import db
+from .telegram_service import ThumbnailTooLargeToFetch
+
+logger = logging.getLogger(__name__)
+
+# Pillow is a hard dependency of this feature only. Importing lazily keeps the
+# rest of the app working if it is somehow missing.
+try:
+    from PIL import Image  # noqa: F401  (presence check only)
+    PIL_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on install
+    PIL_AVAILABLE = False
+
+WEBP_QUALITY = 80
+MICRO_QUALITY = 40
+MICRO_BLUR = 2.0
+
+# Video thumbnails grab a frame at this many seconds in. Frame 0 is often black.
+VIDEO_SEEK_SECONDS = 1.0
+
+FFMPEG_CANDIDATES = ("ffmpeg", "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg")
+
+
+def _find_ffmpeg() -> str | None:
+    for candidate in FFMPEG_CANDIDATES:
+        found = shutil.which(candidate) if "/" not in candidate else candidate
+        if found and Path(found).is_file():
+            return found
+    return None
+
+
+class ThumbnailService:
+    def __init__(self) -> None:
+        # Several workers, because the cost of a thumbnail is almost entirely
+        # the network round-trip to Telegram, not CPU. One worker left 559 items
+        # queued behind a single download at a time.
+        #
+        # Bounded, not unbounded: this is an 8 GB machine, and each in-flight
+        # video may be decoded. Default 4 is a deliberate compromise between
+        # throughput and memory. Set INFINITYVAULT_THUMB_WORKERS=1 to restore
+        # the old serial behaviour.
+        try:
+            workers = int(os.getenv("INFINITYVAULT_THUMB_WORKERS", "4"))
+        except ValueError:
+            workers = 4
+        self._workers = max(1, min(workers, 8))
+        self.worker_tasks: list[asyncio.Task[None]] = []
+        self._running = False
+        self._executor: ThreadPoolExecutor | None = None
+
+    @property
+    def available(self) -> bool:
+        return PIL_AVAILABLE
+
+    def status(self) -> dict:
+        return {
+            "available": PIL_AVAILABLE,
+            "error": None if PIL_AVAILABLE else "Pillow is not installed; thumbnails are disabled.",
+            "ffmpeg": bool(_find_ffmpeg()),
+        }
+
+    # -- generation -------------------------------------------------------
+    def _generate_sync(self, media_id: str, local_path: str | None, media_type: str) -> str:
+        """Create both WebP files. Runs in a thread; returns the error, if any."""
+        from PIL import Image, ImageFilter  # noqa: PLC0415
+
+        source = db.resolve_local_path(local_path)
+        if not source.is_file():
+            raise FileNotFoundError("The local original is missing")
+
+        thumb_file, micro_file = db.thumb_paths(media_id)
+        db.THUMB_DIR.mkdir(parents=True, exist_ok=True)
+
+        frame_source = source
+        extracted: Path | None = None
+        if media_type == "video":
+            ffmpeg = _find_ffmpeg()
+            if not ffmpeg:
+                raise RuntimeError("ffmpeg is required to thumbnail videos")
+            extracted = db.THUMB_DIR / f"{media_id}_frame.jpg"
+            subprocess.run(
+                [ffmpeg, "-y", "-loglevel", "error", "-ss", str(VIDEO_SEEK_SECONDS),
+                 "-i", str(source), "-frames:v", "1", str(extracted)],
+                check=True, timeout=60,
+            )
+            frame_source = extracted
+
+        try:
+            with Image.open(frame_source) as image:
+                # Apply EXIF orientation, otherwise phone photos appear rotated.
+                image = image.convert("RGB")
+                try:
+                    from PIL import ImageOps  # noqa: PLC0415
+                    image = ImageOps.exif_transpose(image)
+                except Exception:
+                    pass
+
+                thumb = image.copy()
+                thumb.thumbnail((db.THUMB_LONGEST_EDGE,) * 2, Image.LANCZOS)
+                thumb.save(thumb_file, "WEBP", quality=WEBP_QUALITY, method=4)
+
+                micro = image.copy()
+                micro.thumbnail((db.MICRO_LONGEST_EDGE,) * 2, Image.LANCZOS)
+                micro = micro.filter(ImageFilter.GaussianBlur(MICRO_BLUR))
+                micro.save(micro_file, "WEBP", quality=MICRO_QUALITY, method=4)
+        finally:
+            if extracted:
+                extracted.unlink(missing_ok=True)
+
+        return ""
+
+    async def _ensure_local_copy(self, media_id: str, local_path: str | None) -> str | None:  # noqa: C901
+        """Fetch a restored row's original from Telegram, if it has no local file.
+
+        Media imported from Saved Messages exists only in Telegram: the row is a
+        pointer with a message id. Without this the whole queue failed with "the
+        local original is missing", so 365 imported photos showed no thumbnail
+        and the grid looked broken even though the import had worked.
+        """
+        source = db.resolve_local_path(local_path)
+        if source.is_file():
+            return local_path
+
+        row = db.get_media_any_client(media_id)
+        if not row or not row["telegram_message_id"]:
+            return local_path
+
+        try:
+            # Imported lazily: telegram_service needs Telethon, which is optional
+            # for a local-only library.
+            from .telegram_service import TelegramService  # noqa: PLC0415
+
+            service = getattr(self, "telegram", None) or TelegramService()
+            # Thumbnails only need a small image, so Telegram's own rendition is
+            # enough and saves downloading megabytes over the user's data.
+            fetched = await service.ensure_local_original(row, allow_thumbnail=True)
+        except Exception:
+            logger.debug("Could not fetch original for %s", media_id, exc_info=True)
+            return local_path
+        return fetched or local_path
+
+    async def generate(self, media_id: str, local_path: str | None, media_type: str) -> None:
+        local_path = await self._ensure_local_copy(media_id, local_path)
+        if not PIL_AVAILABLE:
+            raise RuntimeError("Pillow is not installed; thumbnails are disabled.")
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=self._workers, thread_name_prefix="thumbs")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self._executor, self._generate_sync, media_id, local_path, media_type)
+
+    # -- lifecycle --------------------------------------------------------
+    async def start(self) -> None:
+        db.reset_interrupted_thumbnail_jobs()
+        self._running = True
+        self.worker_tasks = [asyncio.create_task(self._worker()) for _ in range(self._workers)]
+
+    async def stop(self) -> None:
+        self._running = False
+        for task in self.worker_tasks:
+            task.cancel()
+        await asyncio.gather(*self.worker_tasks, return_exceptions=True)
+        if self._executor:
+            self._executor.shutdown(wait=False)
+            self._executor = None
+
+    async def _worker(self) -> None:
+        while self._running:
+            try:
+                job = await asyncio.to_thread(db.next_thumbnail_job)
+                if not job:
+                    await asyncio.sleep(3)
+                    continue
+
+                # Already marked running by the atomic claim in
+                # next_thumbnail_job; marking again would double-count attempts.
+                media_id = job["media_id"]
+                try:
+                    await self.generate(media_id, job["local_path"], job["media_type"])
+                except ThumbnailTooLargeToFetch as exc:
+                    # Deliberate skip, not a failure: no retry, no repeated
+                    # download of a giant file, and the grid stops waiting.
+                    logger.info("Skipped thumbnail for %s: %s", media_id, exc)
+                    await asyncio.to_thread(db.mark_thumbnail_skipped, media_id, str(exc))
+                    continue
+                except Exception as exc:
+                    # A failed thumbnail must never stall the queue; record it
+                    # and move to the next item.
+                    await asyncio.to_thread(db.mark_thumbnail_failed, media_id, str(exc))
+                    continue
+
+                await asyncio.to_thread(db.mark_thumbnail_done, media_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Thumbnail worker error")
+                await asyncio.sleep(3)

@@ -1,0 +1,15 @@
+{
+  "name": "infinityvault",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Private Google Photos-style gallery with Telegram backup",
+  "scripts": {
+    "infinityvault": "node scripts/infinityvault.mjs"
+  },
+  "bin": {
+    "infinityvault": "scripts/infinityvault.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
